@@ -72,7 +72,7 @@ export type GanttFeature = {
   id: string;
   name: string;
   startAt: Date;
-  endAt: Date;
+  endAt: Date | null;
   status: GanttStatus;
   lane?: string; // Optional: features with the same lane will share a row
 };
@@ -1015,22 +1015,28 @@ export const GanttFeatureRow: FC<GanttFeatureRowProps> = ({
   // Calculate sub-row positions for overlapping features using a proper algorithm
   const featureWithPositions = [];
   const subRowEndTimes: Date[] = []; // Track when each sub-row becomes free
-  
+
   for (const feature of sortedFeatures) {
     let subRow = 0;
-    
+
     // Find the first sub-row that's free (doesn't overlap)
-    while (subRow < subRowEndTimes.length && subRowEndTimes[subRow] > feature.startAt) {
+    while (
+      subRow < subRowEndTimes.length &&
+      subRowEndTimes[subRow] > feature.startAt
+    ) {
       subRow++;
     }
-    
+
+    // For layout, if endAt is null, treat it as a short event
+    const endAtForLayout = feature.endAt ?? addDays(feature.startAt, 2);
+
     // Update the end time for this sub-row
     if (subRow === subRowEndTimes.length) {
-      subRowEndTimes.push(feature.endAt);
+      subRowEndTimes.push(endAtForLayout);
     } else {
-      subRowEndTimes[subRow] = feature.endAt;
+      subRowEndTimes[subRow] = endAtForLayout;
     }
-    
+
     featureWithPositions.push({ ...feature, subRow });
   }
 
