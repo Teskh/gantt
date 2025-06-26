@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import {
   GanttProvider,
-  GanttSidebar,
   GanttTimeline,
   GanttHeader,
   GanttFeatureList,
   GanttFeatureRow,
-  GanttSidebarGroup,
-  GanttSidebarItem,
+  // GanttSidebar, // Removed
+  // GanttSidebarGroup, // Removed
+  // GanttSidebarItem, // Removed
   GanttToday,
   type GanttFeature,
   type GanttStatus,
@@ -90,7 +90,7 @@ function App() {
     setFeatures((prev) => [...prev, newFeature]);
   };
 
-  // Group features by lane
+  // Group features by lane - no longer strictly needed for sidebar, but useful for rows
   const groupedFeatures = features.reduce(
     (acc, feature) => {
       const lane = feature.lane ?? 'default';
@@ -113,15 +113,7 @@ function App() {
       </header>
       <div className="flex-grow">
         <GanttProvider range="monthly" onAddItem={handleAddItem} zoom={100}>
-          <GanttSidebar>
-            {Object.entries(groupedFeatures).map(([lane, laneFeatures]) => (
-              <GanttSidebarGroup key={lane} name={lane}>
-                {laneFeatures.map((feature) => (
-                  <GanttSidebarItem key={feature.id} feature={feature} />
-                ))}
-              </GanttSidebarGroup>
-            ))}
-          </GanttSidebar>
+          {/* Removed GanttSidebar and its children */}
           <GanttTimeline>
             <GanttHeader />
             <GanttFeatureList>
