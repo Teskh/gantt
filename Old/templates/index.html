@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Project Gantt Chart</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div id="capacityTooltip" class="capacity-tooltip"></div>
+        <div style="display: flex; align-items: center; gap: 20px; margin-bottom: 20px;">
+            <h2 class="projects-header" onclick="openProjectModal()">
+                Proyectos
+                <span class="edit-icon">✎</span>
+            </h2>
+            <div class="input-container" style="margin-bottom: 0;">
+                <label for="timeline-weeks">Timeline Weeks</label>
+                <div class="input-wrapper">
+                    <input type="number" id="timeline-weeks" value="60">
+                    <div class="input-controls">
+                        <button class="control-btn up">▲</button>
+                        <button class="control-btn down">▼</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Project Modal -->
+        <div id="projectModal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeProjectModal()">&times;</span>
+                <h3>Manage Projects</h3>
+                <div id="projects-list">
+                    <!-- Projects will be added here -->
+                </div>
+                <div class="total-area">
+                    <div>Total Area: <span id="total-area-value">0</span> m²</div>
+                    <div>Adjusted Area: <span id="adjusted-area-value">0</span> m²</div>
+                </div>
+                <div class="modal-actions">
+                    <button onclick="addProject()">➕ Add Project</button>
+                    <button onclick="exportState()">📥 Export State</button>
+                    <input type="file" id="importFile" accept=".json" style="display: none;" onchange="importState(event)">
+                    <button onclick="document.getElementById('importFile').click()">📤 Import State</button>
+                    <button onclick="closeProjectModal()">✔️ Save & Close</button>
+                    <button onclick="localStorage.clear(); location.reload();">🗑️ Clear All Data</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chart-section">
+            <div id="quarterly-capacity-header">
+                <!-- Quarterly capacity inputs will be generated here by JS, aligned with the timeline -->
+            </div>
+            <div id="ganttChart"></div>
+
+            <!-- Chart Toggle Controls -->
+            <div class="chart-toggle-controls">
+                <button id="showCapacityChartBtn" class="toggle-btn active">Capacity Chart</button>
+                <button id="showGroupChartBtn" class="toggle-btn">Group Units Chart</button>
+            </div>
+
+            <!-- Container for Toggleable Charts -->
+            <div id="toggleable-charts">
+                <div id="capacityChartContainer" class="capacity-chart-container chart-view">
+                    <h3>Capacity Planning</h3>
+                    <canvas id="capacityChart"></canvas>
+                    <div class="capacity-stats">
+                        <div class="average-capacity">
+                            Avg: <span id="average-capacity-value">0</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="groupChartContainer" class="group-chart-container chart-view hidden">
+                    <h3>Group Units Over Time</h3>
+                    <canvas id="groupChart"></canvas>
+                    <div id="group-sales-speed-controls" class="group-sales-controls">
+                        <!-- Sales speed inputs will be generated here by JS -->
+                    </div>
+                    <div id="pre-sales-lead-controls" class="pre-sales-lead-controls">
+                        <h4>Pre-Sales Lead Times (months)</h4>
+                        <!-- Pre-sales lead inputs will be generated here by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-dragdata"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

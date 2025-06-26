@@ -1,0 +1,736 @@
+.container {
+    padding: 20px;
+    width: 100%;
+    margin: 0;
+    max-width: 100vw;
+    overflow-x: hidden;
+}
+
+.input-section {
+    margin-bottom: 20px;
+    position: relative;
+}
+
+.projects-header {
+    cursor: pointer;
+    color: #333;
+    margin: 0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+    display: inline-block;
+}
+
+.projects-header:hover {
+    background-color: #f5f5f5;
+}
+
+.edit-icon {
+    margin-left: 8px;
+    font-size: 0.8em;
+    color: #666;
+    transition: color 0.2s ease;
+}
+
+.projects-header:hover .edit-icon {
+    color: #333;
+}
+
+
+.global-params {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.input-container label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 0.9em;
+    color: #555;
+    font-weight: 500;
+}
+
+.input-wrapper {
+    display: flex;
+    align-items: center;
+}
+
+.input-wrapper input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1em;
+    transition: all 0.2s ease;
+    background: white;
+    -moz-appearance: textfield; /* Firefox */
+}
+
+/* Hide number input arrows in Chrome, Safari, Edge, Opera */
+.input-wrapper input::-webkit-outer-spin-button,
+.input-wrapper input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.input-wrapper input:focus {
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+    outline: none;
+}
+
+.input-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-left: 8px;
+}
+
+.input-controls.vertical-controls {
+    flex-direction: column;
+    gap: 1px;
+}
+
+.control-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    width: 14px;
+    height: 14px;
+    line-height: 1;
+    font-size: 8px;
+    color: #666;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.control-btn:hover {
+    color: #333;
+}
+
+
+.project-entry {
+    margin-bottom: 15px;
+    padding: 20px;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    background-color: #f9f9f9;
+    transition: box-shadow 0.2s ease, background-color 0.2s ease;
+    display: grid;
+    /* Added one more column for pre-sales lead */
+    grid-template-columns: auto 1fr 1fr 1fr 1fr 1fr auto auto auto;
+    gap: 15px;
+    align-items: center;
+}
+
+.project-entry .pre-sales-lead-field {
+    position: relative;
+}
+
+.project-entry .pre-sales-lead-field input {
+    padding-right: 30px; /* Make room for the "months" label */
+    border-color: #c8e6c9;
+    background-color: #f1f8e9;
+}
+
+.project-entry .pre-sales-lead-field::after {
+    content: "mo";
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    color: #689f38;
+    font-size: 0.8em;
+    pointer-events: none;
+}
+
+.move-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.move-buttons button {
+    background: none;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: #666;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.move-buttons button:hover {
+    color: #333;
+}
+
+.project-entry label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.9em;
+    color: #666;
+}
+
+.checkbox-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* Center checkbox below label */
+    justify-content: center;
+    font-size: 0.9em;
+    color: #666;
+    text-align: center;
+}
+
+.checkbox-label input[type="checkbox"] {
+    margin-top: 8px; /* Space between label text and checkbox */
+    transform: scale(1.2); /* Make checkbox slightly larger */
+    cursor: pointer;
+}
+
+.project-entry label input {
+    margin-top: 5px;
+}
+
+.project-entry:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.project-entry input {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-right: 10px;
+    transition: border-color 0.2s ease;
+}
+
+.project-entry input:focus {
+    border-color: #4CAF50;
+    outline: none;
+}
+
+.project-entry button {
+    background-color: #ff4444;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.project-entry button:hover {
+    background-color: #cc0000;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.4);
+    backdrop-filter: blur(3px);
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-content {
+    background-color: white;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 30px;
+    width: 95%;
+    max-width: 2000px; /* Increased from 1400px */
+    max-height: 90vh;
+    border-radius: 12px;
+    box-shadow: 0 5px 30px rgba(0,0,0,0.2);
+}
+
+.close {
+    color: #666;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    margin-top: -10px;
+    margin-right: -10px;
+}
+
+.close:hover {
+    color: #333;
+}
+
+.modal-content h3 {
+    margin-top: 0;
+    color: #333;
+    font-size: 1.5em;
+    margin-bottom: 20px;
+}
+
+#projects-list {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding-right: 20px;
+    margin-bottom: 20px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 15px;
+}
+
+.total-area {
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-weight: 500;
+    color: #333;
+    text-align: right;
+}
+
+.total-area div {
+    margin: 5px 0;
+}
+
+.modal-content button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    margin-right: 10px;
+}
+
+.modal-content button:hover {
+    background-color: #45a049;
+}
+
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.chart-section {
+    padding: 0;
+}
+
+#ganttChart {
+    width: 100%;
+    min-height: 400px;
+    padding: 0;
+    /* overflow-x: hidden; Removed to prevent tooltip clipping */
+}
+
+#quarterly-capacity-header {
+    display: flex;
+    margin-left: 0; /* Align with timeline */
+    margin-bottom: 5px;
+    min-width: fit-content; /* Match timeline container width behavior */
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eee; /* Separator line */
+}
+
+.quarterly-capacity-item {
+    display: flex; /* Arrange label marker and input group side-by-side */
+    align-items: stretch; /* Make children fill height */
+    /* flex: weekCount; /* Applied inline via JS */
+    position: relative;
+    min-width: 0; /* Allow shrinking */
+    border-left: 1px solid #ccc; /* Separator between quarters */
+}
+
+
+.quarter-label-marker {
+    flex-grow: 1; /* Allow marker to take up available space */
+    flex-shrink: 1; /* Allow marker to shrink if needed */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px;
+    font-size: 0.8em;
+    color: #555;
+    font-weight: bold;
+    white-space: nowrap;
+    border-right: 1px solid #ccc; /* Separator between label and input */
+    /* border-left: 1px solid #ccc; /* Separator moved to item */
+    text-align: center;
+    background-color: #f8f9fa; /* Light background */
+    min-width: 0; /* Allow shrinking */
+}
+
+.quarter-input-group {
+    display: flex;
+    align-items: center; /* Vertically center the input wrapper */
+    flex-shrink: 0; /* Prevent input group from shrinking */
+    padding: 0 8px; /* Padding around the input */
+    background-color: #f8f9fa; /* Match marker background */
+}
+
+/* Adjust input wrapper within the group */
+.quarter-input-group .input-wrapper {
+    /* No specific styles needed currently */
+}
+
+/* Adjust input styles */
+.quarter-input-group input {
+    max-width: 60px; /* Limit input width */
+    padding: 4px 6px;
+    font-size: 0.9em;
+    text-align: center;
+}
+
+/* Adjust controls styles */
+.quarter-input-group .input-controls {
+    margin-left: 4px; /* Space between input and controls */
+}
+
+.quarter-input-group .control-btn {
+    width: 12px;
+    height: 12px;
+    font-size: 7px;
+}
+
+.timeline-container {
+    margin-left: 0;
+    margin-bottom: 10px;
+    width: 100%;
+    overflow: hidden;
+}
+
+.month-header {
+    display: flex;
+    padding-bottom: 5px;
+    margin-bottom: 5px;
+}
+
+.month-marker {
+    text-align: center;
+    font-size: 0.9em;
+    font-weight: bold;
+    color: #444;
+    padding: 0 5px;
+    position: relative;
+}
+
+
+.week-header {
+    display: flex;
+    width: 100%;
+    flex-wrap: nowrap;
+}
+
+.week-marker {
+    flex: 1 0 auto;
+    min-width: 0;
+    text-align: center;
+    font-size: 0.8em;
+    color: #666;
+    padding: 2px 0;
+    position: relative;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+
+.project-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 3px;
+    width: 100%;
+    /* overflow: hidden; Removed to prevent tooltip clipping */
+}
+
+/* Chart Toggle Styles */
+.chart-toggle-controls {
+    margin-top: 20px;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.toggle-btn {
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    padding: 8px 16px;
+    margin: 0 5px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.2s, color 0.2s;
+    color: #555;
+}
+
+.toggle-btn:hover {
+    background-color: #e0e0e0;
+}
+
+.toggle-btn.active {
+    background-color: #4CAF50;
+    color: white;
+    border-color: #4CAF50;
+}
+
+/* Visibility control */
+.hidden {
+    display: none;
+}
+
+.bar-container {
+    display: flex;
+    align-items: center;
+    height: 22px; /* Slightly taller */
+    width: 100%;
+    padding: 1px 0; /* Add vertical padding */
+}
+
+.project-bar {
+    height: 100%;
+    display: flex;
+    position: relative;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.9); /* Slightly softer white */
+    font-weight: 500; /* Slightly less bold */
+    font-size: 0.8em;
+    border-radius: 4px; /* More rounded corners */
+    cursor: grab;
+    user-select: none;
+    position: relative;
+    padding: 0 5px; /* More horizontal padding */
+    text-align: center;
+    transition: transform 0.1s ease-out, box-shadow 0.2s ease, background 0.2s ease;
+    will-change: transform, box-shadow;
+    /* Subtle gradient and inner shadow */
+    background: linear-gradient(to bottom, rgba(255,255,255,0.1), rgba(0,0,0,0.1));
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.2), 0 1px 2px rgba(0,0,0,0.1);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.2); /* Text shadow for readability */
+}
+
+.bar-container {
+    will-change: transform;
+    /* transition: none; Let's remove this, transform should be quick */
+}
+
+.bar-container.dragging {
+    /* Optional: slightly reduce opacity while dragging */
+    /* opacity: 0.9; */
+    z-index: 10; /* Ensure dragged bar is visually on top */
+}
+
+.project-bar span {
+    pointer-events: none;
+    position: relative;
+    z-index: 1;
+    overflow: hidden; /* Prevent text overflow */
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.mute-button {
+    position: relative;
+    /* left: 3px; Removed */
+    background: rgba(0, 0, 0, 0.3); /* Darker, semi-transparent */
+    border: none;
+    color: rgba(255, 255, 255, 0.8);
+    width: 18px; /* Slightly larger */
+    height: 18px;
+    border-radius: 50%; /* Circular */
+    cursor: pointer;
+    padding: 0;
+    font-size: 10px;
+    line-height: 1;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 5px; /* More space */
+    /* transform: translateY(1px); Removed */
+    transition: background-color 0.2s ease;
+    box-shadow: 0 1px 1px rgba(0,0,0,0.2);
+}
+
+.mute-button:hover {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.mute-button.muted {
+    background-color: #999;
+}
+
+.mute-button.muted:hover {
+    background-color: #888;
+}
+
+.muted {
+    opacity: 0.5;
+    background-color: #999 !important;
+}
+
+.mute-button.muted {
+    background-color: #ccc;
+}
+
+.project-bar:active {
+    cursor: grabbing;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.2); /* Enhance shadow when grabbed */
+    transform: scale(1.01); /* Slightly larger when grabbed */
+}
+
+.tooltip {
+    visibility: hidden;
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    text-align: center;
+    padding: 8px 16px;
+    border-radius: 6px;
+    z-index: 9999;
+    top: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.project-bar {
+    position: relative;
+}
+
+.empty-space {
+    height: 100%;
+}
+
+.chart-view {
+    margin-top: 0; 
+    padding: 15px;
+    position: relative;
+}
+
+.capacity-stats {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 10px;
+}
+
+.average-capacity {
+    background: rgba(75, 192, 192, 0.2);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-weight: bold;
+    color: #333;
+    border: 1px solid rgba(75, 192, 192, 0.3);
+}
+
+.average-capacity span {
+    color: #2e7d32;
+    font-weight: bold;
+}
+
+.capacity-tooltip {
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    pointer-events: none;
+    display: none;
+    z-index: 100;
+}
+
+.capacity-chart-container h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #333;
+    font-size: 1em;
+}
+
+#capacityChart, #groupChart {
+    width: 100%;
+    /* height: 300px; Let container manage height */
+}
+
+.group-sales-controls, .pre-sales-lead-controls {
+    margin-top: 15px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #eee;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.sales-speed-input-group, .pre-sales-lead-input-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.sales-speed-input-group label, .pre-sales-lead-input-group label {
+    font-size: 0.9em;
+    color: #555;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.sales-speed-input-group input, .pre-sales-lead-input-group input {
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    width: 80px; /* Adjust as needed */
+    text-align: right;
+}
+
+.pre-sales-lead-controls {
+    background-color: #f0f7f0; /* Slightly different background to distinguish from sales speed */
+    border-color: #d8e8d8;
+    margin-bottom: 15px;
+}
+
+.pre-sales-lead-input-group label {
+    color: #2e7d32; /* Green tint to distinguish from sales speed */
+}
+
+.pre-sales-lead-input-group input {
+    border-color: #a5d6a7;
+}
+
+.pre-sales-lead-input-group input:focus {
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+    outline: none;
+}
+
+.pre-sales-lead-controls h4 {
+    width: 100%;
+    margin: 0 0 15px 0;
+    color: #2e7d32;
+    font-size: 1em;
+    font-weight: 500;
+}

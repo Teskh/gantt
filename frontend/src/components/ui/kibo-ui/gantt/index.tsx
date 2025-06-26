@@ -27,7 +27,7 @@ import {
 } from 'date-fns';
 import { atom, useAtom } from 'jotai';
 import throttle from 'lodash.throttle';
-import { PlusIcon, TrashIcon } from 'lucide-react';
+import { PlusIcon } from 'lucide-react'; // Removed TrashIcon
 import type {
   CSSProperties,
   FC,
@@ -48,12 +48,13 @@ import {
   useState,
 } from 'react';
 import { Card } from '@/components/ui/card';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
+// Removed ContextMenu imports
+// import {
+//   ContextMenu,
+//   ContextMenuContent,
+//   ContextMenuItem,
+//   ContextMenuTrigger,
+// } from '@/components/ui/context-menu';
 import { cn } from '@/lib/utils';
 
 const draggingAtom = atom(false);
@@ -98,7 +99,7 @@ export type GanttContextProps = {
   zoom: number;
   range: Range;
   columnWidth: number;
-  sidebarWidth: number;
+  // sidebarWidth: number; // Removed
   headerHeight: number;
   rowHeight: number;
   onAddItem: ((date: Date) => void) | undefined;
@@ -172,6 +173,7 @@ const getAddRange = (range: Range) => {
 const getDateByMousePosition = (context: GanttContextProps, mouseX: number) => {
   const timelineStartDate = new Date(context.timelineData[0].year, 0, 1);
   const columnWidth = (context.columnWidth * context.zoom) / 100;
+  // Adjusted: Removed sidebarWidth from calculation
   const offset = Math.floor(mouseX / columnWidth);
   const daysIn = getsDaysIn(context.range);
   const addRange = getAddRange(context.range);
@@ -295,7 +297,7 @@ const GanttContext = createContext<GanttContextProps>({
   range: 'monthly',
   columnWidth: 50,
   headerHeight: 60,
-  sidebarWidth: 300,
+  // sidebarWidth: 300, // Removed
   rowHeight: 36,
   onAddItem: undefined,
   placeholderLength: 2,
@@ -325,8 +327,9 @@ export const GanttContentHeader: FC<GanttContentHeaderProps> = ({
       <div>
         <div
           className="sticky inline-flex whitespace-nowrap px-3 py-2 text-muted-foreground text-xs"
+          // Adjusted: Removed sidebarWidth from left style
           style={{
-            left: 'var(--gantt-sidebar-width)',
+            left: '0px',
           }}
         >
           <p>{title}</p>
@@ -458,128 +461,135 @@ export const GanttHeader: FC<GanttHeaderProps> = ({ className }) => {
   );
 };
 
-export type GanttSidebarItemProps = {
-  feature: GanttFeature;
-  onSelectItem?: (id: string) => void;
-  className?: string;
-};
+// Removed GanttSidebarItemProps
+// export type GanttSidebarItemProps = {
+//   feature: GanttFeature;
+//   onSelectItem?: (id: string) => void;
+//   className?: string;
+// };
 
-export const GanttSidebarItem: FC<GanttSidebarItemProps> = ({
-  feature,
-  onSelectItem,
-  className,
-}) => {
-  const gantt = useContext(GanttContext);
-  const tempEndAt =
-    feature.endAt && isSameDay(feature.startAt, feature.endAt)
-      ? addDays(feature.endAt, 1)
-      : feature.endAt;
-  const duration = tempEndAt
-    ? formatDistance(feature.startAt, tempEndAt)
-    : `${formatDistance(feature.startAt, new Date())} so far`;
+// Removed GanttSidebarItem
+// export const GanttSidebarItem: FC<GanttSidebarItemProps> = ({
+//   feature,
+//   onSelectItem,
+//   className,
+// }) => {
+//   const gantt = useContext(GanttContext);
+//   const tempEndAt =
+//     feature.endAt && isSameDay(feature.startAt, feature.endAt)
+//       ? addDays(feature.endAt, 1)
+//       : feature.endAt;
+//   const duration = tempEndAt
+//     ? formatDistance(feature.startAt, tempEndAt)
+//     : `${formatDistance(feature.startAt, new Date())} so far`;
 
-  const handleClick: MouseEventHandler<HTMLDivElement> = (event) => {
-    if (event.target === event.currentTarget) {
-      // Scroll to the feature in the timeline
-      gantt.scrollToFeature?.(feature);
-      // Call the original onSelectItem callback
-      onSelectItem?.(feature.id);
-    }
-  };
+//   const handleClick: MouseEventHandler<HTMLDivElement> = (event) => {
+//     if (event.target === event.currentTarget) {
+//       // Scroll to the feature in the timeline
+//       gantt.scrollToFeature?.(feature);
+//       // Call the original onSelectItem callback
+//       onSelectItem?.(feature.id);
+//     }
+//   };
 
-  const handleKeyDown: KeyboardEventHandler<HTMLDivElement> = (event) => {
-    if (event.key === 'Enter') {
-      // Scroll to the feature in the timeline  
-      gantt.scrollToFeature?.(feature);
-      // Call the original onSelectItem callback
-      onSelectItem?.(feature.id);
-    }
-  };
+//   const handleKeyDown: KeyboardEventHandler<HTMLDivElement> = (event) => {
+//     if (event.key === 'Enter') {
+//       // Scroll to the feature in the timeline
+//       gantt.scrollToFeature?.(feature);
+//       // Call the original onSelectItem callback
+//       onSelectItem?.(feature.id);
+//     }
+//   };
 
-  return (
-    <div
-      className={cn(
-        'relative flex items-center gap-2.5 p-2.5 text-xs hover:bg-secondary',
-        className
-      )}
-      key={feature.id}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      // biome-ignore lint/a11y/useSemanticElements: "This is a clickable item"
-      role="button"
-      style={{
-        height: 'var(--gantt-row-height)',
-      }}
-      tabIndex={0}
-    >
-      {/* <Checkbox onCheckedChange={handleCheck} className="shrink-0" /> */}
-      <div
-        className="pointer-events-none h-2 w-2 shrink-0 rounded-full"
-        style={{
-          backgroundColor: feature.status.color,
-        }}
-      />
-      <p className="pointer-events-none flex-1 truncate text-left font-medium">
-        {feature.name}
-      </p>
-      <p className="pointer-events-none text-muted-foreground">{duration}</p>
-    </div>
-  );
-};
+//   return (
+//     <div
+//       className={cn(
+//         'relative flex items-center gap-2.5 p-2.5 text-xs hover:bg-secondary',
+//         className
+//       )}
+//       key={feature.id}
+//       onClick={handleClick}
+//       onKeyDown={handleKeyDown}
+//       // biome-ignore lint/a11y/useSemanticElements: "This is a clickable item"
+//       role="button"
+//       style={{
+//         height: 'var(--gantt-row-height)',
+//       }}
+//       tabIndex={0}
+//     >
+//       {/* <Checkbox onCheckedChange={handleCheck} className="shrink-0" /> */}
+//       <div
+//         className="pointer-events-none h-2 w-2 shrink-0 rounded-full"
+//         style={{
+//           backgroundColor: feature.status.color,
+//         }}
+//       />
+//       <p className="pointer-events-none flex-1 truncate text-left font-medium">
+//         {feature.name}
+//       </p>
+//       <p className="pointer-events-none text-muted-foreground">{duration}</p>
+//     </div>
+//   );
+// };
 
-export const GanttSidebarHeader: FC = () => (
-  <div
-    className="sticky top-0 z-10 flex shrink-0 items-end justify-between gap-2.5 border-border/50 border-b bg-backdrop/90 p-2.5 font-medium text-muted-foreground text-xs backdrop-blur-sm"
-    style={{ height: 'var(--gantt-header-height)' }}
-  >
-    {/* <Checkbox className="shrink-0" /> */}
-    <p className="flex-1 truncate text-left">Issues</p>
-    <p className="shrink-0">Duration</p>
-  </div>
-);
+// Removed GanttSidebarHeader
+// export const GanttSidebarHeader: FC = () => (
+//   <div
+//     className="sticky top-0 z-10 flex shrink-0 items-end justify-between gap-2.5 border-border/50 border-b bg-backdrop/90 p-2.5 font-medium text-muted-foreground text-xs backdrop-blur-sm"
+//     style={{ height: 'var(--gantt-header-height)' }}
+//   >
+//     {/* <Checkbox className="shrink-0" /> */}
+//     <p className="flex-1 truncate text-left">Issues</p>
+//     <p className="shrink-0">Duration</p>
+//   </div>
+// );
 
-export type GanttSidebarGroupProps = {
-  children: ReactNode;
-  name: string;
-  className?: string;
-};
+// Removed GanttSidebarGroupProps
+// export type GanttSidebarGroupProps = {
+//   children: ReactNode;
+//   name: string;
+//   className?: string;
+// };
 
-export const GanttSidebarGroup: FC<GanttSidebarGroupProps> = ({
-  children,
-  name,
-  className,
-}) => (
-  <div className={className}>
-    <p
-      className="w-full truncate p-2.5 text-left font-medium text-muted-foreground text-xs"
-      style={{ height: 'var(--gantt-row-height)' }}
-    >
-      {name}
-    </p>
-    <div className="divide-y divide-border/50">{children}</div>
-  </div>
-);
+// Removed GanttSidebarGroup
+// export const GanttSidebarGroup: FC<GanttSidebarGroupProps> = ({
+//   children,
+//   name,
+//   className,
+// }) => (
+//   <div className={className}>
+//     <p
+//       className="w-full truncate p-2.5 text-left font-medium text-muted-foreground text-xs"
+//       style={{ height: 'var(--gantt-row-height)' }}
+//     >
+//       {name}
+//     </p>
+//     <div className="divide-y divide-border/50">{children}</div>
+//   </div>
+// );
 
-export type GanttSidebarProps = {
-  children: ReactNode;
-  className?: string;
-};
+// Removed GanttSidebarProps
+// export type GanttSidebarProps = {
+//   children: ReactNode;
+//   className?: string;
+// };
 
-export const GanttSidebar: FC<GanttSidebarProps> = ({
-  children,
-  className,
-}) => (
-  <div
-    className={cn(
-      'sticky left-0 z-30 h-max min-h-full overflow-clip border-border/50 border-r bg-background/90 backdrop-blur-md',
-      className
-    )}
-    data-roadmap-ui="gantt-sidebar"
-  >
-    <GanttSidebarHeader />
-    <div className="space-y-4">{children}</div>
-  </div>
-);
+// Removed GanttSidebar
+// export const GanttSidebar: FC<GanttSidebarProps> = ({
+//   children,
+//   className,
+// }) => (
+//   <div
+//     className={cn(
+//       'sticky left-0 z-30 h-max min-h-full overflow-clip border-border/50 border-r bg-background/90 backdrop-blur-md',
+//       className
+//     )}
+//     data-roadmap-ui="gantt-sidebar"
+//   >
+//     <GanttSidebarHeader />
+//     <div className="space-y-4">{children}</div>
+//   </div>
+// );
 
 export type GanttAddFeatureHelperProps = {
   top: number;
@@ -596,8 +606,9 @@ export const GanttAddFeatureHelper: FC<GanttAddFeatureHelperProps> = ({
 
   const handleClick = () => {
     const ganttRect = gantt.ref?.current?.getBoundingClientRect();
+    // Adjusted: Removed sidebarWidth from calculation
     const x =
-      mousePosition.x - (ganttRect?.left ?? 0) + scrollX - gantt.sidebarWidth;
+      mousePosition.x - (ganttRect?.left ?? 0) + scrollX;
     const currentDate = getDateByMousePosition(gantt, x);
 
     gantt.onAddItem?.(currentDate);
@@ -905,8 +916,9 @@ export const GanttFeatureItem: FC<GanttFeatureItemProps> = ({
 
   const handleLeftDragMove = useCallback(() => {
     const ganttRect = gantt.ref?.current?.getBoundingClientRect();
+    // Adjusted: Removed sidebarWidth from calculation
     const x =
-      mousePosition.x - (ganttRect?.left ?? 0) + scrollX - gantt.sidebarWidth;
+      mousePosition.x - (ganttRect?.left ?? 0) + scrollX;
     const newStartAt = getDateByMousePosition(gantt, x);
 
     setStartAt(newStartAt);
@@ -914,8 +926,9 @@ export const GanttFeatureItem: FC<GanttFeatureItemProps> = ({
 
   const handleRightDragMove = useCallback(() => {
     const ganttRect = gantt.ref?.current?.getBoundingClientRect();
+    // Adjusted: Removed sidebarWidth from calculation
     const x =
-      mousePosition.x - (ganttRect?.left ?? 0) + scrollX - gantt.sidebarWidth;
+      mousePosition.x - (ganttRect?.left ?? 0) + scrollX;
     const newEndAt = getDateByMousePosition(gantt, x);
 
     setEndAt(newEndAt);
@@ -1096,7 +1109,7 @@ export const GanttMarker: FC<
     onRemove?: (id: string) => void;
     className?: string;
   }
-> = memo(({ label, date, id, onRemove, className }) => {
+> = memo(({ label, date, id, onRemove, className }) => { // Removed onRemove from destructuring
   const gantt = useContext(GanttContext);
   const differenceIn = useMemo(
     () => getDifferenceIn(gantt.range),
@@ -1122,7 +1135,8 @@ export const GanttMarker: FC<
     [date, gantt.range, gantt.columnWidth, gantt.zoom]
   );
 
-  const handleRemove = useCallback(() => onRemove?.(id), [onRemove, id]);
+  // Removed handleRemove callback
+  // const handleRemove = useCallback(() => onRemove?.(id), [onRemove, id]);
 
   return (
     <div
@@ -1132,8 +1146,9 @@ export const GanttMarker: FC<
         transform: `translateX(calc(var(--gantt-column-width) * ${offset} + ${innerOffset}px))`,
       }}
     >
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
+      {/* Removed ContextMenu and its children */}
+      {/* <ContextMenu>
+        <ContextMenuTrigger asChild> */}
           <div
             className={cn(
               'group pointer-events-auto sticky top-0 flex select-auto flex-col flex-nowrap items-center justify-center whitespace-nowrap rounded-b-md bg-card px-2 py-1 text-foreground text-xs',
@@ -1145,7 +1160,7 @@ export const GanttMarker: FC<
               {formatDate(date, 'MMM dd, yyyy')}
             </span>
           </div>
-        </ContextMenuTrigger>
+        {/* </ContextMenuTrigger>
         <ContextMenuContent>
           {onRemove ? (
             <ContextMenuItem
@@ -1157,7 +1172,7 @@ export const GanttMarker: FC<
             </ContextMenuItem>
           ) : null}
         </ContextMenuContent>
-      </ContextMenu>
+      </ContextMenu> */}
       <div className={cn('h-full w-px bg-card', className)} />
     </div>
   );
@@ -1185,7 +1200,8 @@ export const GanttProvider: FC<GanttProviderProps> = ({
     createInitialTimelineData(new Date())
   );
   const [, setScrollX] = useGanttScrollX();
-  const [sidebarWidth, setSidebarWidth] = useState(0);
+  // Removed sidebarWidth state
+  // const [sidebarWidth, setSidebarWidth] = useState(0);
 
   const headerHeight = 60;
   const rowHeight = 36;
@@ -1205,9 +1221,10 @@ export const GanttProvider: FC<GanttProviderProps> = ({
         '--gantt-column-width': `${(zoom / 100) * columnWidth}px`,
         '--gantt-header-height': `${headerHeight}px`,
         '--gantt-row-height': `${rowHeight}px`,
-        '--gantt-sidebar-width': `${sidebarWidth}px`,
+        // Removed sidebarWidth variable
+        // '--gantt-sidebar-width': `${sidebarWidth}px`,
       }) as CSSProperties,
-    [zoom, columnWidth, sidebarWidth]
+    [zoom, columnWidth, headerHeight, rowHeight /* Removed sidebarWidth */]
   );
 
   useEffect(() => {
@@ -1218,32 +1235,32 @@ export const GanttProvider: FC<GanttProviderProps> = ({
     }
   }, [setScrollX]);
 
-  // Update sidebar width when DOM is ready
-  useEffect(() => {
-    const updateSidebarWidth = () => {
-      const sidebarElement = scrollRef.current?.querySelector(
-        '[data-roadmap-ui="gantt-sidebar"]'
-      );
-      const newWidth = sidebarElement ? 300 : 0;
-      setSidebarWidth(newWidth);
-    };
+  // Removed useEffect for updating sidebar width
+  // useEffect(() => {
+  //   const updateSidebarWidth = () => {
+  //     const sidebarElement = scrollRef.current?.querySelector(
+  //       '[data-roadmap-ui="gantt-sidebar"]'
+  //     );
+  //     const newWidth = sidebarElement ? 300 : 0;
+  //     setSidebarWidth(newWidth);
+  //   };
 
-    // Update immediately
-    updateSidebarWidth();
+  //   // Update immediately
+  //   updateSidebarWidth();
 
-    // Also update on resize or when children change
-    const observer = new MutationObserver(updateSidebarWidth);
-    if (scrollRef.current) {
-      observer.observe(scrollRef.current, {
-        childList: true,
-        subtree: true,
-      });
-    }
+  //   // Also update on resize or when children change
+  //   const observer = new MutationObserver(updateSidebarWidth);
+  //   if (scrollRef.current) {
+  //     observer.observe(scrollRef.current, {
+  //       childList: true,
+  //       subtree: true,
+  //     });
+  //   }
 
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
+  //   return () => {
+  //     observer.disconnect();
+  //   };
+  // }, []);
 
   // Fix the useCallback to include all dependencies
   const handleScroll = useCallback(
@@ -1311,7 +1328,7 @@ export const GanttProvider: FC<GanttProviderProps> = ({
         setScrollX(scrollElement.scrollLeft);
       }
     }, 100),
-    []
+    [timelineData, setScrollX] // Added timelineData and setScrollX to dependencies
   );
 
   useEffect(() => {
@@ -1342,7 +1359,7 @@ export const GanttProvider: FC<GanttProviderProps> = ({
       zoom,
       range,
       columnWidth,
-      sidebarWidth,
+      // Removed sidebarWidth
       headerHeight,
       rowHeight,
       onAddItem,
@@ -1351,14 +1368,14 @@ export const GanttProvider: FC<GanttProviderProps> = ({
       ref: scrollRef,
     });
 
-    // Scroll to align the feature's start with the right side of the sidebar
+    // Scroll to align the feature's start with the left edge of the timeline
     const targetScrollLeft = Math.max(0, offset);
     
     scrollElement.scrollTo({
       left: targetScrollLeft,
       behavior: 'smooth',
     });
-  }, [timelineData, zoom, range, columnWidth, sidebarWidth, headerHeight, rowHeight, onAddItem]);
+  }, [timelineData, zoom, range, columnWidth, headerHeight, rowHeight, onAddItem]); // Removed sidebarWidth from dependencies
 
   return (
     <GanttContext.Provider
@@ -1367,7 +1384,7 @@ export const GanttProvider: FC<GanttProviderProps> = ({
         range,
         headerHeight,
         columnWidth,
-        sidebarWidth,
+        // Removed sidebarWidth
         rowHeight,
         onAddItem,
         timelineData,
@@ -1385,7 +1402,8 @@ export const GanttProvider: FC<GanttProviderProps> = ({
         ref={scrollRef}
         style={{
           ...cssVariables,
-          gridTemplateColumns: 'var(--gantt-sidebar-width) 1fr',
+          // Adjusted: Removed sidebarWidth from gridTemplateColumns
+          gridTemplateColumns: '1fr',
         }}
       >
         {children}
