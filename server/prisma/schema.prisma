@@ -1,0 +1,34 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Project {
+  id         Int      @id @default(autoincrement())
+  name       String
+  m2         Int
+  gg         Float    @default(4.5)
+  start      DateTime
+  muted      Boolean  @default(false)
+  scenarioId Int
+  scenario   Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+}
+
+model ProductionRatePoint {
+  id         Int      @id @default(autoincrement())
+  date       DateTime
+  rate       Float
+  scenarioId Int
+  scenario   Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+}
+
+model Scenario {
+  id                   Int                   @id @default(autoincrement())
+  name                 String
+  projects             Project[]
+  productionRatePoints ProductionRatePoint[]
+}
