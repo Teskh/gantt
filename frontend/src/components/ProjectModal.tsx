@@ -5,7 +5,7 @@ interface ProjectModalProps {
   open: boolean;
   project: Project | null;
   initialDate: Date;
-  onSubmit: (name: string, m2: number, gg: number, start: Date) => void;
+  onSubmit: (name: string, m2: number, gg: number, priority: number, start: Date) => void;
   onCancel: () => void;
 }
 
@@ -21,6 +21,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   const [name, setName] = useState(project?.name || '');
   const [m2, setM2] = useState(project?.m2.toString() || '');
   const [ggStr, setGgStr] = useState(project?.gg?.toString() || '4.5');
+  const [priorityStr, setPriorityStr] = useState(project?.priority?.toString() || '10');
   const [startStr, setStartStr] = useState(formatDateInput(initialDate));
   
   useEffect(() => {
@@ -28,11 +29,13 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       setName(project.name);
       setM2(project.m2.toString());
       setGgStr(project.gg.toString());
+      setPriorityStr((project.priority ?? 10).toString());
     } else {
       setName('');
       setM2('');
       setStartStr(formatDateInput(initialDate));
       setGgStr('4.5');
+      setPriorityStr('10');
     }
   }, [project, open, initialDate]);
 
@@ -42,11 +45,11 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-card p-6 rounded-lg w-96">
         <h2 className="text-xl font-bold mb-4 text-foreground">
-          {project ? 'Edit Project' : 'Add New Project'}
+          {project ? 'Editar Proyecto' : 'Agregar Nuevo Proyecto'}
         </h2>
         
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-1 text-foreground">Project Name</label>
+          <label className="block text-sm font-medium mb-1 text-foreground">Nombre del Proyecto</label>
           <input
             type="text"
             className="border rounded w-full p-2 bg-input text-foreground"
@@ -56,7 +59,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
         </div>
         
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-1 text-foreground">Size (m²)</label>
+          <label className="block text-sm font-medium mb-1 text-foreground">Tamaño (m²)</label>
           <input
             type="number"
             className="border rounded w-full p-2 bg-input text-foreground"
@@ -75,10 +78,21 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             onChange={e => setGgStr(e.target.value)}
           />
         </div>
+
+        <div className="mb-4">
+          <label className="block text-sm font-medium mb-1 text-foreground">Priority</label>
+          <input
+            type="number"
+            className="border rounded w-full p-2 bg-input text-foreground"
+            value={priorityStr}
+            min="1"
+            onChange={e => setPriorityStr(e.target.value)}
+          />
+        </div>
         
         {!project && (
           <div className="mb-4">
-            <label className="block text-sm font-medium mb-1 text-foreground">Start Date</label>
+            <label className="block text-sm font-medium mb-1 text-foreground">Fecha de Inicio</label>
             <input
               type="date"
               className="border rounded w-full p-2 bg-input text-foreground"
@@ -93,20 +107,26 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             className="px-4 py-2 border rounded bg-secondary text-secondary-foreground hover:bg-secondary/80"
             onClick={onCancel}
           >
-            Cancel
+            Cancelar
           </button>
           <button
             className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
             onClick={() => {
               const parsedM2 = parseInt(m2, 10);
               const parsedGg = parseFloat(ggStr);
-              if (name.trim() && !isNaN(parsedM2) && !isNaN(parsedGg)) {
+              const parsedPriority = parseInt(priorityStr, 10);
+              if (
+                name.trim() &&
+                !isNaN(parsedM2) &&
+                !isNaN(parsedGg) &&
+                !isNaN(parsedPriority)
+              ) {
                 const selectedDate = project ? project.start : new Date(startStr);
-                onSubmit(name, parsedM2, parsedGg, selectedDate);
+                onSubmit(name, parsedM2, parsedGg, parsedPriority, selectedDate);
               }
             }}
           >
-            {project ? 'Save' : 'Add Project'}
+            {project ? 'Guardar' : 'Agregar Proyecto'}
           </button>
         </div>
       </div>

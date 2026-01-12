@@ -12,8 +12,10 @@ model Project {
   name       String
   m2         Int
   gg         Float    @default(4.5)
+  priority   Int      @default(10)
   start      DateTime
   muted      Boolean  @default(false)
+  displayOrder Int    @default(0)
   scenarioId Int
   scenario   Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
 }

@@ -7,7 +7,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, Copy, Plus, Trash } from 'lucide-react'; // Changed from @radix-ui/react-icons
+import { ChevronDown, Copy, Trash, Plus } from 'lucide-react'; // Changed from @radix-ui/react-icons
 import { ModeToggle } from './ui/mode-toggle';
 
 export interface Scenario {
@@ -19,9 +19,9 @@ interface ScenarioManagerProps {
   scenarios: Scenario[];
   activeScenario: Scenario | null;
   onScenarioChange: (scenarioId: number) => void;
-  onScenarioCreate: () => void;
   onScenarioCopy: (scenarioId: number) => void;
   onScenarioDelete: (scenarioId: number) => void;
+  onScenarioCreate: (name?: string) => void;
   isEditingScenarioName: boolean;
   scenarioNameDraft: string;
   onScenarioNameDraftChange: (value: string) => void;
@@ -34,9 +34,9 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
   scenarios,
   activeScenario,
   onScenarioChange,
-  onScenarioCreate,
   onScenarioCopy,
   onScenarioDelete,
+  onScenarioCreate,
   isEditingScenarioName,
   scenarioNameDraft,
   onScenarioNameDraftChange,
@@ -103,10 +103,6 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
         )}
       </div>
       <div className="flex items-center gap-2">
-        <Button onClick={onScenarioCreate} size="sm">
-          <Plus className="mr-2 h-4 w-4" />
-          Nuevo
-        </Button>
         <Button onClick={handleCopy} size="sm" variant="outline" disabled={!activeScenario}>
           <Copy className="mr-2 h-4 w-4" />
           Copiar
@@ -114,6 +110,10 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
         <Button onClick={handleDelete} size="sm" variant="destructive" disabled={!activeScenario}>
           <Trash className="mr-2 h-4 w-4" />
           Eliminar
+        </Button>
+        <Button onClick={() => onScenarioCreate()} size="sm">
+          <Plus className="mr-2 h-4 w-4" />
+          Nuevo
         </Button>
         <ModeToggle />
       </div>

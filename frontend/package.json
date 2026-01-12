@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "serve -s dist -p 5150"
+    "start": "serve -s dist -p 5151"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.2.15",

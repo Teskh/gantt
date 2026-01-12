@@ -10,7 +10,9 @@ export interface Project {
   m2: number;
   gg: number;
   start: Date;
+  priority?: number;
   muted: boolean;
+  displayOrder: number;
 }
 
 export interface ProductionRatePoint {
@@ -31,7 +33,7 @@ function App() {
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
 
   useEffect(() => {
-    fetch('http://localhost:3001/api/scenarios')
+    fetch('http://201.220.102.82:3005/api/scenarios')
       .then(res => res.json())
       .then((data: Scenario[]) => {
         setScenarios(data);
@@ -49,7 +51,7 @@ function App() {
       return;
     }
 
-    fetch(`http://localhost:3001/api/projects?scenarioId=${activeScenario.id}`)
+    fetch(`http://201.220.102.82:3005/api/projects?scenarioId=${activeScenario.id}`)
       .then(res => res.json())
       .then((data: any[]) => {
         setProjects(
@@ -57,16 +59,21 @@ function App() {
             ...p,
             start: new Date(p.start),
             gg: p.gg ?? 4.5,
+            priority: p.priority ?? 10,
             muted: p.muted ?? false,
+            displayOrder: p.displayOrder ?? 0,
           })),
         );
       })
       .catch(console.error);
 
-    fetch(`http://localhost:3001/api/production-rate-points?scenarioId=${activeScenario.id}`)
+    fetch(`http://201.220.102.82:3005/api/production-rate-points?scenarioId=${activeScenario.id}`)
       .then(res => res.json())
       .then((data: any[]) => {
-        setProductionRatePoints(data.map(p => ({ ...p, date: new Date(p.date) })));
+        const points = data
+          .map(p => ({ ...p, date: new Date(p.date) }))
+          .sort((a, b) => a.date.getTime() - b.date.getTime());
+        setProductionRatePoints(points);
       })
       .catch(console.error);
   }, [activeScenario]);
@@ -83,7 +90,7 @@ function App() {
         p.id === projectId ? { ...p, start: newStart } : p
       )
     );
-    fetch(`http://localhost:3001/api/projects/${projectId}`, {
+    fetch(`http://201.220.102.82:3005/api/projects/${projectId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start: newStart.toISOString() })
@@ -104,7 +111,7 @@ function App() {
       handleScenarioCreate(trimmed)
     } else if (trimmed !== activeScenario.name) {
       // If active scenario exists and name has changed, update it
-      fetch(`http://localhost:3001/api/scenarios/${activeScenario.id}`, {
+      fetch(`http://201.220.102.82:3005/api/scenarios/${activeScenario.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed })
@@ -141,29 +148,56 @@ function App() {
         p.id === projectId ? { ...p, muted: newMutedState } : p
       )
     );
-    fetch(`http://localhost:3001/api/projects/${projectId}`, {
+    fetch(`http://201.220.102.82:3005/api/projects/${projectId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ muted: newMutedState }),
     }).catch(console.error);
   };
 
-  const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted'>) => {
+  const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
+    fetch(`http://201.220.102.82:3005/api/projects/${projectId}/${action}`, {
+      method: 'POST',
+    })
+      .then(() => {
+        // Refetch projects to get updated order
+        if (activeScenario) {
+          fetch(`http://201.220.102.82:3005/api/projects?scenarioId=${activeScenario.id}`)
+            .then(res => res.json())
+            .then((data: any[]) => {
+              setProjects(
+                data.map(p => ({
+                  ...p,
+                  start: new Date(p.start),
+                  gg: p.gg ?? 4.5,
+                  priority: p.priority ?? 10,
+                  muted: p.muted ?? false,
+                  displayOrder: p.displayOrder ?? 0,
+                })),
+              );
+            })
+            .catch(console.error);
+        }
+      })
+      .catch(console.error);
+  };
+
+  const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
     if (!activeScenario) return;
-    fetch('http://localhost:3001/api/projects', {
+    fetch('http://201.220.102.82:3005/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id })
     })
       .then(res => res.json())
       .then((project: any) => {
-        setProjects(prev => [...prev, { ...project, start: new Date(project.start) }]);
+        setProjects(prev => [...prev, { ...project, start: new Date(project.start), displayOrder: project.displayOrder ?? 0 }]);
       })
       .catch(console.error);
   };
 
   const handleProjectDelete = (id: number) => {
-    fetch(`http://localhost:3001/api/projects/${id}`, { method: 'DELETE' })
+    fetch(`http://201.220.102.82:3005/api/projects/${id}`, { method: 'DELETE' })
       .then(() => {
         setProjects(prev => prev.filter(p => p.id !== id));
       })
@@ -172,7 +206,7 @@ function App() {
 
   const handleProjectChange = (updated: Project) => {
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
-    fetch(`http://localhost:3001/api/projects/${updated.id}`, {
+    fetch(`http://201.220.102.82:3005/api/projects/${updated.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -181,6 +215,7 @@ function App() {
         gg: updated.gg,
         start: updated.start.toISOString(),
         muted: updated.muted,
+        priority: updated.priority,
       })
     }).catch(console.error);
   };
@@ -196,11 +231,25 @@ function App() {
     setProjectModalOpen(true);
   };
 
-  const handleModalSubmit = (name: string, m2: number, gg: number, start: Date) => {
+  const handleModalSubmit = (
+    name: string,
+    m2: number,
+    gg: number,
+    priority: number,
+    start: Date
+  ) => {
     if (activeProject) {
-      handleProjectChange({ ...activeProject, name, m2, gg, start, muted: activeProject.muted });
+      handleProjectChange({
+        ...activeProject,
+        name,
+        m2,
+        gg,
+        priority,
+        start,
+        muted: activeProject.muted,
+      });
     } else {
-      handleProjectAdd({ name, m2, gg, start });
+      handleProjectAdd({ name, m2, gg, priority, start });
     }
     setProjectModalOpen(false);
   };
@@ -212,7 +261,7 @@ function App() {
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
     if (!activeScenario) return;
     setProductionRatePoints(points);
-    fetch(`http://localhost:3001/api/production-rate-points?scenarioId=${activeScenario.id}`, {
+    fetch(`http://201.220.102.82:3005/api/production-rate-points?scenarioId=${activeScenario.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(points.map(p => ({ ...p, date: p.date.toISOString() })))
@@ -230,7 +279,7 @@ function App() {
     const name = nameFromInput || window.prompt('Ingrese el nombre del nuevo escenario:', 'Nuevo Escenario');
     if (!name) return;
 
-    fetch('http://localhost:3001/api/scenarios', {
+    fetch('http://201.220.102.82:3005/api/scenarios', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -244,7 +293,7 @@ function App() {
   };
 
   const handleScenarioCopy = (scenarioId: number) => {
-    fetch(`http://localhost:3001/api/scenarios/${scenarioId}/copy`, { method: 'POST' })
+    fetch(`http://201.220.102.82:3005/api/scenarios/${scenarioId}/copy`, { method: 'POST' })
       .then(res => res.json())
       .then((newScenario: Scenario) => {
         setScenarios(prev => [...prev, newScenario]);
@@ -260,7 +309,7 @@ function App() {
     }
     if (!window.confirm('¿Está seguro de que desea eliminar este escenario?')) return;
 
-    fetch(`http://localhost:3001/api/scenarios/${scenarioId}`, { method: 'DELETE' })
+    fetch(`http://201.220.102.82:3005/api/scenarios/${scenarioId}`, { method: 'DELETE' })
       .then(() => {
         setScenarios(prev => {
           const newScenarios = prev.filter(s => s.id !== scenarioId);
@@ -303,6 +352,7 @@ function App() {
                 onProjectDelete={handleProjectDelete}
                 onCreateProjectAtDate={handleCreateProjectAtDate}
                 onProjectMuteToggle={handleProjectMuteToggle}
+                onProjectReorder={handleProjectReorder}
               />
             ) : (
               <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>
