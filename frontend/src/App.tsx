@@ -4,6 +4,8 @@ import { ProductionGantt } from './components/ProductionGantt'
 import { ProjectModal } from './components/ProjectModal'
 import { ScenarioManager, type Scenario } from './components/ScenarioManager'
 import { ThemeProvider } from './components/theme-provider'
+import { apiFetch, apiUrl } from './lib/api'
+import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
 export interface Project {
   id: number;
   name: string;
@@ -16,8 +18,9 @@ export interface Project {
 }
 
 export interface ProductionRatePoint {
-  date: Date;
+  month: Date;
   rate: number;
+  isActive: boolean;
 }
 
 function App() {
@@ -28,14 +31,72 @@ function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [initialDate, setInitialDate] = useState<Date>(new Date());
+  const defaultRangeStart = normalizeMonth(new Date());
+  const defaultRangeEnd = addMonths(defaultRangeStart, 11);
+  const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
+  const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
+  const [isRangeLoaded, setIsRangeLoaded] = useState(false);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
 
+  const formatMonthValue = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+  const parseMonthValue = (value: string): Date | null => {
+    const [year, month] = value.split('-').map(Number);
+    if (!year || !month) return null;
+    return new Date(year, month - 1, 1);
+  };
+
+  const handleRangeStartChange = (value: string) => {
+    const parsed = parseMonthValue(value);
+    if (!parsed) return;
+    setRangeStart(parsed);
+    if (parsed > rangeEnd) {
+      setRangeEnd(parsed);
+    }
+  };
+
+  const handleRangeEndChange = (value: string) => {
+    const parsed = parseMonthValue(value);
+    if (!parsed) return;
+    if (parsed < rangeStart) {
+      setRangeStart(parsed);
+    }
+    setRangeEnd(parsed);
+  };
+
   useEffect(() => {
-    fetch('http://201.220.102.82:3005/api/scenarios')
-      .then(res => res.json())
-      .then((data: Scenario[]) => {
+    apiFetch<{ rangeStart: string; rangeEnd: string }>('/api/app-settings')
+      .then((data) => {
+        const parsedStart = parseMonthValue(data.rangeStart);
+        const parsedEnd = parseMonthValue(data.rangeEnd);
+        if (parsedStart) setRangeStart(parsedStart);
+        if (parsedEnd) setRangeEnd(parsedEnd);
+        setIsRangeLoaded(true);
+      })
+      .catch((error) => {
+        console.error(error);
+        setIsRangeLoaded(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!isRangeLoaded) return;
+    fetch(apiUrl('/api/app-settings'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rangeStart: serializeMonth(rangeStart),
+        rangeEnd: serializeMonth(rangeEnd),
+      }),
+    }).catch(console.error);
+  }, [rangeStart, rangeEnd, isRangeLoaded]);
+
+  useEffect(() => {
+    apiFetch<Scenario[]>('/api/scenarios')
+      .then((data) => {
         setScenarios(data);
         if (data.length > 0) {
           setActiveScenario(data[0]);
@@ -51,9 +112,8 @@ function App() {
       return;
     }
 
-    fetch(`http://201.220.102.82:3005/api/projects?scenarioId=${activeScenario.id}`)
-      .then(res => res.json())
-      .then((data: any[]) => {
+    apiFetch<any[]>(`/api/projects?scenarioId=${activeScenario.id}`)
+      .then((data) => {
         setProjects(
           data.map(p => ({
             ...p,
@@ -67,12 +127,11 @@ function App() {
       })
       .catch(console.error);
 
-    fetch(`http://201.220.102.82:3005/api/production-rate-points?scenarioId=${activeScenario.id}`)
-      .then(res => res.json())
-      .then((data: any[]) => {
+    apiFetch<any[]>(`/api/production-rate-points?scenarioId=${activeScenario.id}`)
+      .then((data) => {
         const points = data
-          .map(p => ({ ...p, date: new Date(p.date) }))
-          .sort((a, b) => a.date.getTime() - b.date.getTime());
+          .map(p => ({ ...p, month: new Date(p.month), isActive: !!p.isActive }))
+          .sort((a, b) => a.month.getTime() - b.month.getTime());
         setProductionRatePoints(points);
       })
       .catch(console.error);
@@ -90,7 +149,7 @@ function App() {
         p.id === projectId ? { ...p, start: newStart } : p
       )
     );
-    fetch(`http://201.220.102.82:3005/api/projects/${projectId}`, {
+    fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start: newStart.toISOString() })
@@ -111,7 +170,7 @@ function App() {
       handleScenarioCreate(trimmed)
     } else if (trimmed !== activeScenario.name) {
       // If active scenario exists and name has changed, update it
-      fetch(`http://201.220.102.82:3005/api/scenarios/${activeScenario.id}`, {
+      fetch(apiUrl(`/api/scenarios/${activeScenario.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed })
@@ -148,7 +207,7 @@ function App() {
         p.id === projectId ? { ...p, muted: newMutedState } : p
       )
     );
-    fetch(`http://201.220.102.82:3005/api/projects/${projectId}`, {
+    fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ muted: newMutedState }),
@@ -156,13 +215,13 @@ function App() {
   };
 
   const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
-    fetch(`http://201.220.102.82:3005/api/projects/${projectId}/${action}`, {
+    fetch(apiUrl(`/api/projects/${projectId}/${action}`), {
       method: 'POST',
     })
       .then(() => {
         // Refetch projects to get updated order
         if (activeScenario) {
-          fetch(`http://201.220.102.82:3005/api/projects?scenarioId=${activeScenario.id}`)
+          fetch(apiUrl(`/api/projects?scenarioId=${activeScenario.id}`))
             .then(res => res.json())
             .then((data: any[]) => {
               setProjects(
@@ -184,7 +243,7 @@ function App() {
 
   const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
     if (!activeScenario) return;
-    fetch('http://201.220.102.82:3005/api/projects', {
+    fetch(apiUrl('/api/projects'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id })
@@ -197,7 +256,7 @@ function App() {
   };
 
   const handleProjectDelete = (id: number) => {
-    fetch(`http://201.220.102.82:3005/api/projects/${id}`, { method: 'DELETE' })
+    fetch(apiUrl(`/api/projects/${id}`), { method: 'DELETE' })
       .then(() => {
         setProjects(prev => prev.filter(p => p.id !== id));
       })
@@ -206,7 +265,7 @@ function App() {
 
   const handleProjectChange = (updated: Project) => {
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
-    fetch(`http://201.220.102.82:3005/api/projects/${updated.id}`, {
+    fetch(apiUrl(`/api/projects/${updated.id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -261,10 +320,16 @@ function App() {
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
     if (!activeScenario) return;
     setProductionRatePoints(points);
-    fetch(`http://201.220.102.82:3005/api/production-rate-points?scenarioId=${activeScenario.id}`, {
+    fetch(apiUrl(`/api/production-rate-points?scenarioId=${activeScenario.id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(points.map(p => ({ ...p, date: p.date.toISOString() })))
+      body: JSON.stringify(
+        points.map(p => ({
+          month: serializeMonth(p.month),
+          rate: p.rate,
+          isActive: p.isActive,
+        }))
+      )
     }).catch(console.error);
   };
 
@@ -279,7 +344,7 @@ function App() {
     const name = nameFromInput || window.prompt('Ingrese el nombre del nuevo escenario:', 'Nuevo Escenario');
     if (!name) return;
 
-    fetch('http://201.220.102.82:3005/api/scenarios', {
+    fetch(apiUrl('/api/scenarios'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -293,7 +358,7 @@ function App() {
   };
 
   const handleScenarioCopy = (scenarioId: number) => {
-    fetch(`http://201.220.102.82:3005/api/scenarios/${scenarioId}/copy`, { method: 'POST' })
+    fetch(apiUrl(`/api/scenarios/${scenarioId}/copy`), { method: 'POST' })
       .then(res => res.json())
       .then((newScenario: Scenario) => {
         setScenarios(prev => [...prev, newScenario]);
@@ -309,7 +374,7 @@ function App() {
     }
     if (!window.confirm('¿Está seguro de que desea eliminar este escenario?')) return;
 
-    fetch(`http://201.220.102.82:3005/api/scenarios/${scenarioId}`, { method: 'DELETE' })
+    fetch(apiUrl(`/api/scenarios/${scenarioId}`), { method: 'DELETE' })
       .then(() => {
         setScenarios(prev => {
           const newScenarios = prev.filter(s => s.id !== scenarioId);
@@ -323,8 +388,8 @@ function App() {
   };
 
   return (
-    <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-      <div className="flex flex-col min-h-screen font-sans bg-background text-foreground">
+    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
+      <div className="flex flex-col min-h-screen bg-background text-foreground">
         <ScenarioManager
           scenarios={scenarios}
           activeScenario={activeScenario}
@@ -338,36 +403,40 @@ function App() {
           onScenarioNameSave={handleScenarioNameSave}
           onScenarioNameEditStart={handleScenarioNameEditStart}
           onScenarioNameEditCancel={handleScenarioNameEditCancel}
+          rangeStart={formatMonthValue(rangeStart)}
+          rangeEnd={formatMonthValue(rangeEnd)}
+          onRangeStartChange={handleRangeStartChange}
+          onRangeEndChange={handleRangeEndChange}
         />
-        <div className="flex-grow">
-          <div className="max-w-screen-2xl mx-auto p-4">
-            {activeScenario ? (
-              <ProductionGantt
-                projects={projects}
-                productionRatePoints={productionRatePoints}
-                onProjectUpdate={handleProjectUpdate}
-                onProductionRatePointsChange={handleProductionRateUpdate}
-                onProductionRatePointsSave={handleProductionRateSave}
-                onProjectEdit={handleEditProject}
-                onProjectDelete={handleProjectDelete}
-                onCreateProjectAtDate={handleCreateProjectAtDate}
-                onProjectMuteToggle={handleProjectMuteToggle}
-                onProjectReorder={handleProjectReorder}
-              />
-            ) : (
-              <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>
-                Cargando escenarios o no se encontraron escenarios.
-              </div>
-            )}
-            <ProjectModal
-              open={projectModalOpen}
-              project={activeProject}
-              initialDate={initialDate}
-              onCancel={() => setProjectModalOpen(false)}
-              onSubmit={handleModalSubmit}
+        <main className="flex flex-col flex-grow min-h-0">
+          {activeScenario ? (
+            <ProductionGantt
+              projects={projects}
+              productionRatePoints={productionRatePoints}
+              onProjectUpdate={handleProjectUpdate}
+              onProductionRatePointsChange={handleProductionRateUpdate}
+              onProductionRatePointsSave={handleProductionRateSave}
+              onProjectEdit={handleEditProject}
+              onProjectDelete={handleProjectDelete}
+              onCreateProjectAtDate={handleCreateProjectAtDate}
+              onProjectMuteToggle={handleProjectMuteToggle}
+              onProjectReorder={handleProjectReorder}
+              rangeStart={rangeStart}
+              rangeEnd={rangeEnd}
             />
-          </div>
-        </div>
+          ) : (
+            <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>
+              Cargando escenarios o no se encontraron escenarios.
+            </div>
+          )}
+          <ProjectModal
+            open={projectModalOpen}
+            project={activeProject}
+            initialDate={initialDate}
+            onCancel={() => setProjectModalOpen(false)}
+            onSubmit={handleModalSubmit}
+          />
+        </main>
       </div>
     </ThemeProvider>
   )

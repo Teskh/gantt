@@ -43,7 +43,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-card p-6 rounded-lg w-96">
+      <div className="bg-card border border-border p-6 rounded-lg w-96 shadow-lg">
         <h2 className="text-xl font-bold mb-4 text-foreground">
           {project ? 'Editar Proyecto' : 'Agregar Nuevo Proyecto'}
         </h2>
@@ -52,7 +52,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <label className="block text-sm font-medium mb-1 text-foreground">Nombre del Proyecto</label>
           <input
             type="text"
-            className="border rounded w-full p-2 bg-input text-foreground"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
             value={name}
             onChange={e => setName(e.target.value)}
           />
@@ -62,7 +62,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <label className="block text-sm font-medium mb-1 text-foreground">Tamaño (m²)</label>
           <input
             type="number"
-            className="border rounded w-full p-2 bg-input text-foreground"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
             value={m2}
             onChange={e => setM2(e.target.value)}
           />
@@ -73,17 +73,17 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <input
             type="number"
             step="0.1"
-            className="border rounded w-full p-2 bg-input text-foreground"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
             value={ggStr}
             onChange={e => setGgStr(e.target.value)}
           />
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-1 text-foreground">Priority</label>
+          <label className="block text-sm font-medium mb-1 text-foreground">Prioridad</label>
           <input
             type="number"
-            className="border rounded w-full p-2 bg-input text-foreground"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
             value={priorityStr}
             min="1"
             onChange={e => setPriorityStr(e.target.value)}
@@ -95,7 +95,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             <label className="block text-sm font-medium mb-1 text-foreground">Fecha de Inicio</label>
             <input
               type="date"
-              className="border rounded w-full p-2 bg-input text-foreground"
+              className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
               value={startStr}
               onChange={e => setStartStr(e.target.value)}
             />

@@ -2,7 +2,13 @@ import React, { useMemo, useEffect, useRef, useState, useLayoutEffect } from 're
 import { flushSync } from 'react-dom';
 import { cn } from '@/lib/utils';
 import type { Project, ProductionRatePoint } from '../App';
-import { ProductionRateGraph } from './ProductionRateGraph';
+import { ProductionRateMonthly } from './ProductionRateMonthly';
+import {
+  getActivePoints,
+  interpolateRate,
+  monthKey,
+  normalizeMonth,
+} from '@/lib/production-rate';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -14,15 +20,7 @@ import {
   ContextMenuSeparator,
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from '@/components/ui/dropdown-menu';
-import { Button } from '@/components/ui/button';
-import { ChevronDown, Pencil, PlusCircle, Trash2, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
+import { Pencil, PlusCircle, Trash2, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
 
 interface ProductionGanttProps {
   projects: Project[];
@@ -35,6 +33,8 @@ interface ProductionGanttProps {
   onCreateProjectAtDate: (startDate: Date) => void;
   onProjectMuteToggle: (projectId: number) => void;
   onProjectReorder: (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => void;
+  rangeStart: Date;
+  rangeEnd: Date;
 }
 
 const addDays = (date: Date, days: number): Date => {
@@ -43,43 +43,10 @@ const addDays = (date: Date, days: number): Date => {
   return result;
 };
 
-const getRateForDate = (date: Date, points: ProductionRatePoint[]): number => {
-  if (points.length === 0) return 0;
-  if (points.length === 1) return points[0].rate;
-
-  const sortedPoints = [...points].sort((a, b) => a.date.getTime() - b.date.getTime());
-  const time = date.getTime();
-
-  const p1 = sortedPoints[0];
-  const p2 = sortedPoints[1];
-  const firstSegmentSlope = (p2.date.getTime() - p1.date.getTime()) === 0 ? 0 : (p2.rate - p1.rate) / (p2.date.getTime() - p1.date.getTime());
-
-  if (time < p1.date.getTime()) {
-    return Math.max(0, p1.rate + (time - p1.date.getTime()) * firstSegmentSlope);
-  }
-
-  const pn_1 = sortedPoints[sortedPoints.length - 2];
-  const pn = sortedPoints[sortedPoints.length - 1];
-  const lastSegmentSlope = (pn.date.getTime() - pn_1.date.getTime()) === 0 ? 0 : (pn.rate - pn_1.rate) / (pn.date.getTime() - pn_1.date.getTime());
-
-  if (time > pn.date.getTime()) {
-    return Math.max(0, pn.rate + (time - pn.date.getTime()) * lastSegmentSlope);
-  }
-
-  for (let i = 0; i < sortedPoints.length - 1; i++) {
-    const point1 = sortedPoints[i];
-    const point2 = sortedPoints[i + 1];
-    if (time >= point1.date.getTime() && time <= point2.date.getTime()) {
-      const t1 = point1.date.getTime();
-      const t2 = point2.date.getTime();
-      if (t1 === t2) return point1.rate;
-      const ratio = (time - t1) / (t2 - t1);
-      return Math.max(0, point1.rate + ratio * (point2.rate - point1.rate));
-    }
-  }
-
-  return 0; // Should not be reached
-};
+const getRateForDate = (
+  date: Date,
+  activePoints: ProductionRatePoint[]
+): number => interpolateRate(date, activePoints);
 
 export const ProductionGantt: React.FC<ProductionGanttProps> = ({ 
   projects, 
@@ -92,10 +59,11 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   onCreateProjectAtDate,
   onProjectMuteToggle,
   onProjectReorder,
+  rangeStart,
+  rangeEnd,
 }) => {
   const [contextMenuProject, setContextMenuProject] = useState<Project | null>(null);
   const [contextMenuDate, setContextMenuDate] = useState<Date | null>(null);
-  const [summaryOpen, setSummaryOpen] = useState(false);
   const ganttChartRef = useRef<HTMLDivElement>(null);
   const [ganttChartWidth, setGanttChartWidth] = useState(100); // Set reasonable initial width
   const [dragInfo, setDragInfo] = useState<{ projectId: number; dragOffset: number } | null>(null);
@@ -120,10 +88,10 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const maxRateMap: Record<typeof rateView, number> = {
-    daily: 130,
-    weekly: 650,
-    monthly: 2600,
-    yearly: 32500,
+    daily: 140,
+    weekly: 670,
+    monthly: 2900,
+    yearly: 35000,
   };
 
   const displayedPoints = useMemo(
@@ -141,6 +109,11 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       ...p,
       rate: p.rate / rateMultipliers[rateView],
     }));
+
+  const activeRatePoints = useMemo(
+    () => getActivePoints(productionRatePoints),
+    [productionRatePoints]
+  );
 
   const handleDisplayedPointsChange = (points: ProductionRatePoint[]) => {
     onProductionRatePointsChange(toDailyPoints(points));
@@ -225,7 +198,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   }, []);
 
   const calculatedProjects = useMemo(() => {
-    if (projects.length === 0 || productionRatePoints.length === 0) return [];
+    if (projects.length === 0 || activeRatePoints.length === 0) return [];
 
     const processingProjects = projects.map(p => ({
       ...p,
@@ -253,7 +226,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       const activeProjects = processingProjects.filter(p => !p.muted && p.start.getTime() <= currentDate.getTime() && p.remainingM2 > 0);
 
       if (activeProjects.length > 0) {
-        const rateForDay = getRateForDate(currentDate, productionRatePoints) * (250 / 365);
+        const rateForDay = getRateForDate(currentDate, activeRatePoints) * (250 / 365);
         if (rateForDay <= 0) {
             currentDate = addDays(currentDate, 1);
             continue;
@@ -293,62 +266,19 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         return { ...p, duration: Math.max(1, Math.round(duration)) }; // Ensure duration is at least 1 day
       })
       .sort((a, b) => a.displayOrder - b.displayOrder); // Sort by display order
-  }, [projects, productionRatePoints]);
+  }, [projects, activeRatePoints]);
 
   const [minDate, maxDate] = useMemo(() => {
-    if (calculatedProjects.length === 0) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return [addDays(today, -5), addDays(today, 5)];
-    }
+    const start = normalizeMonth(rangeStart);
+    const end = normalizeMonth(rangeEnd);
+    const lastDay = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+    start.setHours(0, 0, 0, 0);
+    lastDay.setHours(0, 0, 0, 0);
+    return [start, lastDay];
+  }, [rangeStart, rangeEnd]);
 
-    const projectMinDate = new Date(Math.min(...calculatedProjects.map(p => p.start.getTime())));
-    projectMinDate.setHours(0,0,0,0);
-    const projectMaxDate = new Date(Math.max(...calculatedProjects.map(p => p.end.getTime())));
-    projectMaxDate.setHours(0,0,0,0);
-
-    return [addDays(projectMinDate, -5), addDays(projectMaxDate, 5)];
-  }, [calculatedProjects]);
-
-  useEffect(() => {
-    if (!minDate || !maxDate || productionRatePoints.length < 1) return;
-
-    const sortedPoints = [...productionRatePoints].sort(
-      (a, b) => a.date.getTime() - b.date.getTime()
-    );
-
-    const minDateTime = minDate.getTime();
-    const maxDateTime = maxDate.getTime();
-
-    let updated = false;
-    let newPoints = [...productionRatePoints];
-
-    const hasMinBoundary = sortedPoints.some(
-      (p) => p.date.getTime() === minDateTime
-    );
-    if (!hasMinBoundary) {
-      const newFirstRate = getRateForDate(minDate, sortedPoints);
-      newPoints.push({ date: new Date(minDateTime), rate: newFirstRate });
-      updated = true;
-    }
-
-    const hasMaxBoundary = sortedPoints.some(
-      (p) => p.date.getTime() === maxDateTime
-    );
-    if (!hasMaxBoundary) {
-      const newLastRate = getRateForDate(maxDate, sortedPoints);
-      newPoints.push({ date: new Date(maxDateTime), rate: newLastRate });
-      updated = true;
-    }
-
-    if (updated) {
-      const finalPoints = newPoints.sort(
-        (a, b) => a.date.getTime() - b.date.getTime()
-      );
-      onProductionRatePointsChange(finalPoints);
-    }
-  }, [minDate.getTime(), maxDate.getTime(), productionRatePoints, onProductionRatePointsChange]);
-
+  const minMonth = useMemo(() => normalizeMonth(minDate), [minDate]);
+  const maxMonth = useMemo(() => normalizeMonth(maxDate), [maxDate]);
 
   const totalDays = Math.max(1, Math.round((maxDate.getTime() - minDate.getTime()) / (1000 * 3600 * 24)) + 1);
   
@@ -388,6 +318,46 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     }
     return months;
   }, [minDate, maxDate, totalDays, dayWidth]);
+
+  const monthPositions = useMemo(() => {
+    let cursor = 0;
+    return monthHeaders.map((header) => {
+      const width = header.width;
+      const x = cursor + width / 2;
+      cursor += width;
+      return {
+        key: monthKey(header.date),
+        date: header.date,
+        width,
+        x,
+      };
+    });
+  }, [monthHeaders]);
+
+  const monthAbbr = [
+    "ENE",
+    "FEB",
+    "MAR",
+    "ABR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AGO",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DIC",
+  ];
+
+  const monthBoundaries = useMemo(() => {
+    let cursor = 0;
+    const boundaries = [0];
+    monthHeaders.forEach((header) => {
+      cursor += header.width;
+      boundaries.push(cursor);
+    });
+    return boundaries;
+  }, [monthHeaders]);
 
   // --- Project summary for header hover ---------------------------------------------------------
   const projectSummary = useMemo(() => {
@@ -487,179 +457,162 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   return (
-    <>
-      {summaryOpen && (
-        <div className="fixed inset-0 bg-black/50 z-30 pointer-events-none" />
-      )}
-      <div className="mb-6 bg-card p-4 rounded-lg shadow">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-xl font-bold text-foreground">
-            {rateView === 'daily' && 'Tasa de Producción Diaria (m²)'}
-            {rateView === 'weekly' && 'Tasa de Producción Semanal (m²)'}
-            {rateView === 'monthly' && 'Tasa de Producción Mensual (m²)'}
-            {rateView === 'yearly' && 'Tasa de Producción Anual (m²)'}
-          </h2>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="text-sm">
-                {rateView === 'daily' && 'Diario'}
-                {rateView === 'weekly' && 'Semanal'}
-                {rateView === 'monthly' && 'Mensual'}
-                {rateView === 'yearly' && 'Anual'}
-                <ChevronDown className="ml-2 h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-40">
-              <DropdownMenuRadioGroup value={rateView} onValueChange={(value) => setRateView(value as typeof rateView)}>
-                <DropdownMenuRadioItem value="daily">Diario</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="weekly">Semanal</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="monthly">Mensual</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="yearly">Anual</DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <ProductionRateGraph
-          points={displayedPoints}
-          onPointsChange={handleDisplayedPointsChange}
-          onPointsSave={handleDisplayedPointsSave}
-          minDate={minDate}
-          maxDate={maxDate}
-          minRate={minRateMap[rateView]}
-          maxRate={maxRateMap[rateView]}
-        />
-      </div>
+    <div className="flex min-h-full flex-col">
+      <ProductionRateMonthly
+        points={displayedPoints}
+        onPointsChange={handleDisplayedPointsChange}
+        onPointsSave={handleDisplayedPointsSave}
+        minMonth={minMonth}
+        maxMonth={maxMonth}
+        minRate={minRateMap[rateView]}
+        maxRate={maxRateMap[rateView]}
+        rateView={rateView}
+        onRateViewChange={setRateView}
+        monthPositions={monthPositions}
+      />
 
-      {calculatedProjects.length > 0 ? (
-        <ContextMenu onOpenChange={(open) => {
-          if (!open) {
-            setContextMenuProject(null);
-            setContextMenuDate(null);
-          }
-        }}>
-          <ContextMenuTrigger asChild>
-            <div ref={ganttChartRef} className="gantt-chart w-full min-w-full border rounded-lg bg-card shadow overflow-hidden">
-              <HoverCard open={summaryOpen} onOpenChange={setSummaryOpen}>
-                <HoverCardTrigger asChild>
-                  <div
-                    className="gantt-header grid sticky top-0 bg-muted z-10 cursor-help"
-                    style={{
-                      gridTemplateColumns: `${monthHeaders
-                        .map((m) => `${m.width}px`)
-                        .join(' ')}`,
-                    }}
-                  >
-                    {monthHeaders.map(({ date }, index) => {
-                      const showYear = date.getMonth() === 0 || index === 0;
-                      return (
-                        <div
-                          key={date.toISOString()}
-                          className="text-center border-r border-b p-2 text-xs font-medium overflow-hidden whitespace-nowrap text-muted-foreground"
-                        >
-                          {date.toLocaleDateString(undefined, { month: 'short' })}
-                          {showYear && ` ${date.getFullYear()}`}
-                        </div>
-                      );
-                    })}
+      <HoverCard>
+        <HoverCardTrigger asChild>
+          <div
+            className="gantt-header grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
+            style={{
+              gridTemplateColumns: `${monthHeaders
+                .map((m) => `${m.width}px`)
+                .join(' ')}`,
+            }}
+          >
+            {monthHeaders.map(({ date }, index) => {
+              const showYear = date.getMonth() === 0 || index === 0;
+              return (
+                <div
+                  key={date.toISOString()}
+                  className="flex items-center justify-center border-r border-border/60 py-2 px-1 text-center"
+                >
+                  {monthAbbr[date.getMonth()]}
+                  {showYear && ` ${date.getFullYear()}`}
+                </div>
+              );
+            })}
+          </div>
+        </HoverCardTrigger>
+        <HoverCardContent className="w-[800px] max-h-none overflow-visible bg-popover text-popover-foreground z-40 rounded-none" side="top" align="center" sideOffset={10}>
+          <div className="space-y-3">
+            <h3 className="font-semibold text-sm">Resumen de Proyectos</h3>
+            <div>
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="px-2 py-1 min-w-[120px]">Proyecto</th>
+                    <th className="px-2 py-1 text-right min-w-[60px]">m²</th>
+                    <th className="px-2 py-1 text-right min-w-[80px]">m²&nbsp;equivalente</th>
+                    <th className="px-2 py-1 text-right min-w-[40px]">GG</th>
+                    <th className="px-2 py-1 min-w-[80px]">Inicio</th>
+                    <th className="px-2 py-1 min-w-[80px]">Fin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {calculatedProjects.map((p) => (
+                    <tr key={p.id} className="border-b border-border/50">
+                      <td className="px-2 py-1 truncate max-w-[120px]" title={p.name}>
+                        {p.name}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        {p.m2.toLocaleString()}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        {Math.round((p.m2 * (p.gg ?? 4.5)) / 4.5).toLocaleString()}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        {(p.gg ?? 4.5).toFixed(1)}
+                      </td>
+                      <td className="px-2 py-1">
+                        {p.start.toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: '2-digit',
+                        })}
+                      </td>
+                      <td className="px-2 py-1">
+                        {p.end.toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          year: '2-digit',
+                        })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {projectSummary && (
+              <div className="grid grid-cols-2 gap-4 pt-2 border-t text-xs">
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Total proyectos:</span>
+                    <span className="font-semibold">{projectSummary.totalProjects}</span>
                   </div>
-                </HoverCardTrigger>
-                <HoverCardContent className="w-[800px] max-h-none overflow-visible bg-popover text-popover-foreground z-40" side="top" align="center" sideOffset={10}>
-                  <div className="space-y-3">
-                    <h3 className="font-semibold text-sm">Resumen de Proyectos</h3>
-                    <div>
-                      <table className="w-full text-xs border-collapse">
-                        <thead>
-                          <tr className="text-left border-b">
-                            <th className="px-2 py-1 min-w-[120px]">Proyecto</th>
-                            <th className="px-2 py-1 text-right min-w-[60px]">m²</th>
-                            <th className="px-2 py-1 text-right min-w-[80px]">m²&nbsp;equivalente</th>
-                            <th className="px-2 py-1 text-right min-w-[40px]">GG</th>
-                            <th className="px-2 py-1 min-w-[80px]">Inicio</th>
-                            <th className="px-2 py-1 min-w-[80px]">Fin</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {calculatedProjects.map((p) => (
-                            <tr key={p.id} className="border-b border-border/50">
-                              <td className="px-2 py-1 truncate max-w-[120px]" title={p.name}>
-                                {p.name}
-                              </td>
-                              <td className="px-2 py-1 text-right">
-                                {p.m2.toLocaleString()}
-                              </td>
-                              <td className="px-2 py-1 text-right">
-                                {Math.round((p.m2 * (p.gg ?? 4.5)) / 4.5).toLocaleString()}
-                              </td>
-                              <td className="px-2 py-1 text-right">
-                                {(p.gg ?? 4.5).toFixed(1)}
-                              </td>
-                              <td className="px-2 py-1">
-                                {p.start.toLocaleDateString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  year: '2-digit',
-                                })}
-                              </td>
-                              <td className="px-2 py-1">
-                                {p.end.toLocaleDateString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  year: '2-digit',
-                                })}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {projectSummary && (
-                      <div className="grid grid-cols-2 gap-4 pt-2 border-t text-xs">
-                        <div className="space-y-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Total proyectos:</span>
-                            <span className="font-semibold">{projectSummary.totalProjects}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Total m²:</span>
-                            <span className="font-semibold">
-                              {projectSummary.aggregateM2.toLocaleString()}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">GG promedio:</span>
-                            <span className="font-semibold">
-                              {projectSummary.averageGG.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Período:</span>
-                            <span className="font-semibold text-right">
-                              {projectSummary.earliestStart.toLocaleDateString(undefined, {
-                                month: 'short',
-                                year: '2-digit',
-                              })}{' '}
-                              –{' '}
-                              {projectSummary.latestEnd.toLocaleDateString(undefined, {
-                                month: 'short',
-                                year: '2-digit',
-                              })}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Total m²:</span>
+                    <span className="font-semibold">
+                      {projectSummary.aggregateM2.toLocaleString()}
+                    </span>
                   </div>
-                </HoverCardContent>
-              </HoverCard>
-              <div
-                className="gantt-body relative"
-                style={{ height: `${calculatedProjects.length * rowHeight}px` }}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onContextMenu={handleContainerContextMenu}
-              >
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">GG promedio:</span>
+                    <span className="font-semibold">
+                      {projectSummary.averageGG.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Período:</span>
+                    <span className="font-semibold text-right">
+                      {projectSummary.earliestStart.toLocaleDateString(undefined, {
+                        month: 'short',
+                        year: '2-digit',
+                      })}{' '}
+                      –{' '}
+                      {projectSummary.latestEnd.toLocaleDateString(undefined, {
+                        month: 'short',
+                        year: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </HoverCardContent>
+      </HoverCard>
+
+      <ContextMenu onOpenChange={(open) => {
+        if (!open) {
+          setContextMenuProject(null);
+          setContextMenuDate(null);
+        }
+      }}>
+        <ContextMenuTrigger asChild>
+          <div
+            ref={ganttChartRef}
+            className="gantt-body relative w-full min-w-full flex-1 bg-background overflow-hidden"
+            style={{ minHeight: `${Math.max(calculatedProjects.length * rowHeight, 200)}px` }}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onContextMenu={handleContainerContextMenu}
+          >
+            <div className="absolute inset-0 pointer-events-none">
+              {monthBoundaries.slice(0, -1).map((position, index) => (
+                <div
+                  key={`${position}-${index}`}
+                  className="absolute top-0 bottom-0 w-px"
+                  style={{
+                    left: `${position}px`,
+                    backgroundColor: "var(--gantt-line-subtle)",
+                  }}
+                />
+              ))}
+            </div>
                 {/* Hidden span for measuring text width */}
                 <span 
                   ref={textMeasureRef}
@@ -677,7 +630,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   return (
                     <div key={project.id} className="gantt-row grid absolute w-full" style={{ gridTemplateColumns: `1fr`, top: `${index * rowHeight}px`, height: `${rowHeight}px` }}>
                       <div
-                        className="gantt-bars-container border-b relative h-full"
+                        className="gantt-bars-container relative h-full"
                       >
                         {dragFeedback && dragInfo?.projectId === project.id && (
                           <div className="absolute top-0 bottom-0 z-20 pointer-events-none" style={{ left: `${dragFeedback.left}px` }}>
@@ -692,7 +645,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
                                className={cn(
-                                 'absolute h-3/5 top-1/2 -translate-y-1/2 rounded text-xs select-none',
+                                 'absolute h-3/5 top-1/2 -translate-y-1/2 text-xs select-none',
                                  { 'opacity-50': project.muted }
                                )}
                                style={{ left: `${left}px`, width: `${width}px` }}
@@ -703,22 +656,26 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  onDoubleClick={() => onProjectMuteToggle(project.id)}
                                  onDragStart={(e) => handleDragStart(e, project.id)}
                                  onDragEnd={() => { setDragInfo(null); setDragFeedback(null); }}
-                                 className="h-full w-full cursor-move rounded"
-                                 style={{ backgroundColor: 'var(--project-bar)' }}
+                                 className={cn(
+                                   "h-full w-full cursor-move border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                   project.muted
+                                     ? "project-bar-muted border-dashed"
+                                     : "project-bar"
+                                 )}
                                  data-project-id={project.id}
                                >
                                  {textFits ? (
-                                   <span className="truncate font-bold text-white px-2 flex items-center justify-center h-full">
+                                   <span className="truncate px-2 flex items-center justify-center h-full">
                                      {project.name}
                                    </span>
                                  ) : (
-                                   <div className="relative h-full">
+                                   <div className="relative h-full w-full">
                                      <span
-                                       className="absolute font-bold text-foreground bg-card px-2 py-1 rounded shadow-sm border whitespace-nowrap z-10"
+                                       className="absolute font-bold text-foreground bg-card px-2 py-1 rounded-none shadow-sm border whitespace-nowrap z-10"
                                        style={{
-                                         left: `${width + 4}px`,
+                                         left: '100%',
                                          top: '50%',
-                                         transform: 'translateY(-50%)',
+                                         transform: 'translate(6px, -50%)',
                                        }}
                                      >
                                        {project.name}
@@ -728,7 +685,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                </div>
                              </div>
                            </HoverCardTrigger>
-                           <HoverCardContent className="w-64 bg-popover text-popover-foreground">
+                           <HoverCardContent className="w-64 bg-popover text-popover-foreground rounded-none">
                              <div className="space-y-2 p-2 text-xs">
                                <p className="font-bold text-sm">{project.name}</p>
                                <div className="grid grid-cols-[50px,1fr] gap-y-1 items-center">
@@ -758,9 +715,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                     </div>
                   );
                 })}
+
+                {calculatedProjects.length === 0 && (
+                  <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                    No hay proyectos para mostrar. Haz clic derecho para añadir un proyecto.
+                  </div>
+                )}
               </div>
-            </div>
-          </ContextMenuTrigger>
+            </ContextMenuTrigger>
           <ContextMenuContent className="w-48">
             <>
               <ContextMenuItem onClick={() => handleProjectAction('add')}>
@@ -823,21 +785,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
             </>
           </ContextMenuContent>
         </ContextMenu>
-      ) : (
-        <ContextMenu>
-          <ContextMenuTrigger asChild>
-            <div ref={ganttChartRef} className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{minHeight: '200px'}}>
-              No hay proyectos para mostrar. Haz clic derecho para añadir un proyecto.
-            </div>
-          </ContextMenuTrigger>
-          <ContextMenuContent className="w-48">
-            <ContextMenuItem onClick={() => handleProjectAction('add')}>
-              <PlusCircle />
-              Añadir proyecto
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
-      )}
-    </>
+    </div>
   );
 };

@@ -17,11 +17,32 @@ fs.mkdirSync(dataDir, { recursive: true });
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 
+const parseMonthString = (value) => {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!year || month < 1 || month > 12) return null;
+  return { year, month };
+};
+
 const normalizeMonth = (value) => {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const normalized = new Date(Date.UTC(date.getFullYear(), date.getMonth(), 1));
-  return normalized.toISOString().slice(0, 10);
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-01`;
+  }
+  const parsed = parseMonthString(value);
+  if (!parsed) return null;
+  return `${parsed.year}-${String(parsed.month).padStart(2, "0")}-01`;
+};
+
+const compareMonthStrings = (start, end) => {
+  const startParts = parseMonthString(start);
+  const endParts = parseMonthString(end);
+  if (!startParts || !endParts) return null;
+  const startIndex = startParts.year * 12 + startParts.month;
+  const endIndex = endParts.year * 12 + endParts.month;
+  return startIndex - endIndex;
 };
 
 const initDb = () => {
@@ -29,6 +50,12 @@ const initDb = () => {
     CREATE TABLE IF NOT EXISTS scenarios (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      range_start TEXT NOT NULL,
+      range_end TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS projects (
@@ -145,7 +172,28 @@ const seedDb = () => {
   });
 };
 
+const getDefaultRange = () => {
+  const now = new Date();
+  const start = normalizeMonth(now);
+  const end = normalizeMonth(new Date(now.getFullYear(), now.getMonth() + 11, 1));
+  return { start, end };
+};
+
+const ensureAppSettings = () => {
+  const existing = db
+    .prepare("SELECT range_start, range_end FROM app_settings WHERE id = 1")
+    .get();
+  if (existing) return existing;
+
+  const { start, end } = getDefaultRange();
+  db.prepare(
+    "INSERT INTO app_settings (id, range_start, range_end) VALUES (1, ?, ?)"
+  ).run(start, end);
+  return { range_start: start, range_end: end };
+};
+
 initDb();
+ensureAppSettings();
 seedDb();
 
 // --- Scenarios ---
@@ -264,6 +312,54 @@ app.delete("/api/scenarios/:id", (req, res) => {
     return res.status(404).json({ error: "Scenario not found" });
   }
   res.json({ id });
+});
+
+// --- App Settings ---
+app.get("/api/app-settings", (_req, res) => {
+  const settings = ensureAppSettings();
+  res.json({
+    rangeStart: settings.range_start.slice(0, 7),
+    rangeEnd: settings.range_end.slice(0, 7),
+  });
+});
+
+app.put("/api/app-settings", (req, res) => {
+  const { rangeStart, rangeEnd } = req.body;
+  if (!rangeStart || !rangeEnd) {
+    return res
+      .status(400)
+      .json({ error: "rangeStart and rangeEnd are required" });
+  }
+
+  const normalizedStart = normalizeMonth(rangeStart);
+  const normalizedEnd = normalizeMonth(rangeEnd);
+  if (!normalizedStart || !normalizedEnd) {
+    return res.status(400).json({ error: "Invalid range values" });
+  }
+
+  const monthDelta = compareMonthStrings(normalizedStart, normalizedEnd);
+  if (monthDelta === null) {
+    return res.status(400).json({ error: "Invalid range values" });
+  }
+  if (monthDelta > 0) {
+    return res
+      .status(400)
+      .json({ error: "rangeStart must be before rangeEnd" });
+  }
+
+  const result = db
+    .prepare("UPDATE app_settings SET range_start = ?, range_end = ? WHERE id = 1")
+    .run(normalizedStart, normalizedEnd);
+  if (result.changes === 0) {
+    db.prepare(
+      "INSERT INTO app_settings (id, range_start, range_end) VALUES (1, ?, ?)"
+    ).run(normalizedStart, normalizedEnd);
+  }
+
+  res.json({
+    rangeStart: normalizedStart.slice(0, 7),
+    rangeEnd: normalizedEnd.slice(0, 7),
+  });
 });
 
 // --- Projects ---
