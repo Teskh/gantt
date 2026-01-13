@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gantt Again - Mockup C (Precision Light)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'JetBrains Mono', monospace; }
+        .grid-bg {
+            background-image: 
+                linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .gantt-lines {
+            background-image: linear-gradient(90deg, #cbd5e1 1px, transparent 1px);
+            background-size: 80px 100%;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 h-screen flex flex-col overflow-hidden selection:bg-amber-200 selection:text-amber-900">
+
+    <!-- Header: Scenario Toolbar -->
+    <header class="h-12 bg-white border-b border-slate-300 flex items-center justify-between px-4 z-20 shadow-sm">
+        <div class="flex items-center gap-6">
+            <div class="text-amber-700 font-bold tracking-tighter text-xl">PRO.PLANNER</div>
+            
+            <!-- Scenario Controls -->
+            <div class="flex items-center bg-slate-100 rounded border border-slate-300 p-0.5 shadow-inner">
+                <span class="px-2 text-xs text-slate-500 font-bold uppercase">Scenario:</span>
+                <select class="bg-transparent text-sm text-slate-900 focus:outline-none border-none py-1 pr-8 pl-2 font-medium">
+                    <option>PRIMARY_PROD_CYCLE_V2</option>
+                    <option>FALLBACK_PLAN_B</option>
+                </select>
+                <button class="px-2 border-l border-slate-300 text-slate-500 hover:text-indigo-600 hover:bg-slate-200 transition-colors"><i data-lucide="edit-2" class="w-3 h-3"></i></button>
+                <button class="px-2 border-l border-slate-300 text-slate-500 hover:text-indigo-600 hover:bg-slate-200 transition-colors"><i data-lucide="copy" class="w-3 h-3"></i></button>
+                <button class="px-2 border-l border-slate-300 text-slate-500 hover:text-red-600 hover:bg-slate-200 transition-colors"><i data-lucide="trash" class="w-3 h-3"></i></button>
+            </div>
+
+            <button class="flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-indigo-700 border border-slate-300 rounded px-2 py-1 bg-white hover:bg-slate-100 shadow-sm transition-colors">
+                <i data-lucide="plus-square" class="w-3 h-3"></i> NEW SCENARIO
+            </button>
+        </div>
+
+        <div class="flex items-center gap-4 text-xs">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                <span class="text-emerald-700 font-medium">SYSTEM ONLINE</span>
+            </div>
+            <div class="text-slate-400">V.2.0.4</div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 flex flex-col min-h-0">
+        
+        <!-- Capacity Graph (Technical View) -->
+        <div class="h-64 bg-white border-b-2 border-slate-300 relative flex flex-col">
+            <div class="absolute top-2 right-2 flex gap-px bg-slate-100 border border-slate-300 shadow-sm">
+                <button class="px-3 py-1 text-[10px] font-bold bg-amber-500 text-white">D</button>
+                <button class="px-3 py-1 text-[10px] font-bold hover:bg-slate-200 text-slate-600">W</button>
+                <button class="px-3 py-1 text-[10px] font-bold hover:bg-slate-200 text-slate-600">M</button>
+                <button class="px-3 py-1 text-[10px] font-bold hover:bg-slate-200 text-slate-600">Y</button>
+            </div>
+            
+            <div class="absolute top-2 left-2 text-[10px] text-amber-700 font-bold border border-amber-500/30 px-2 py-0.5 bg-amber-50">
+                CAPACITY_CURVE [units/day]
+            </div>
+
+            <div class="flex-1 relative w-full grid-bg">
+                <!-- SVG Graph -->
+                <svg class="w-full h-full absolute inset-0" preserveAspectRatio="none">
+                    <!-- Axis Lines -->
+                    <line x1="0" y1="25%" x2="100%" y2="25%" stroke="#cbd5e1" stroke-dasharray="4 4" />
+                    <line x1="0" y1="50%" x2="100%" y2="50%" stroke="#cbd5e1" stroke-dasharray="4 4" />
+                    <line x1="0" y1="75%" x2="100%" y2="75%" stroke="#cbd5e1" stroke-dasharray="4 4" />
+
+                    <!-- Data Line (Sharp/Linear) -->
+                    <polyline points="0,200 150,200 300,50 450,50 600,150 750,150 900,100 1200,100" 
+                              fill="none" stroke="#d97706" stroke-width="2" vector-effect="non-scaling-stroke"/>
+                    
+                    <!-- Area under curve (Hatched pattern simulated with opacity) -->
+                    <polygon points="0,250 0,200 150,200 300,50 450,50 600,150 750,150 900,100 1200,100 1200,250" 
+                             fill="#f59e0b" fill-opacity="0.1" />
+
+                    <!-- Manipulation Points -->
+                    <rect x="294" y="44" width="12" height="12" fill="#fff" stroke="#d97706" stroke-width="2" class="cursor-crosshair hover:fill-amber-100 shadow-sm" />
+                    <rect x="594" y="144" width="12" height="12" fill="#fff" stroke="#d97706" stroke-width="2" class="cursor-crosshair hover:fill-amber-100 shadow-sm" />
+                </svg>
+            </div>
+        </div>
+
+        <!-- Gantt Chart -->
+        <div class="flex-1 bg-slate-50 relative flex flex-col min-h-0">
+            <!-- Timeline Scale -->
+            <div class="h-8 bg-slate-100 border-b border-slate-300 flex items-center sticky top-0 z-10 text-[10px] text-slate-500 font-bold select-none">
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-12</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2 bg-amber-50 text-amber-700 border-b-2 border-b-amber-400">2026-07-13</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-14</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-15</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-16</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-17</div>
+                <div class="flex-1 text-center border-r border-slate-200 pt-2">2026-07-18</div>
+            </div>
+
+            <!-- Gantt Rows -->
+            <div class="flex-1 overflow-auto p-4 space-y-1 relative gantt-lines">
+                
+                <!-- Project Row 1 -->
+                <div class="relative h-12 flex items-center group">
+                    <!-- The Bar -->
+                    <div class="absolute left-[10%] w-[35%] h-8 bg-white border border-emerald-600 hover:bg-emerald-50 cursor-move flex items-center justify-between px-2 shadow-[2px_2px_0px_rgba(5,150,105,0.2)] hover:shadow-[2px_2px_0px_rgba(5,150,105,0.4)] transition-shadow">
+                        <div class="flex flex-col">
+                            <span class="text-xs font-bold text-emerald-800">PRJ-ALPHA</span>
+                            <span class="text-[9px] text-emerald-600">P:100 | C:2.5x</span>
+                        </div>
+                        <span class="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-1 border border-emerald-200">RUNNING</span>
+                    </div>
+                    <!-- Context Trigger -->
+                    <div class="absolute left-[46%] ml-2 opacity-0 group-hover:opacity-100 flex gap-1">
+                        <button class="bg-white border border-slate-300 p-1 hover:border-amber-500 text-slate-400 hover:text-amber-600 shadow-sm"><i data-lucide="edit" class="w-3 h-3"></i></button>
+                        <button class="bg-white border border-slate-300 p-1 hover:border-red-500 text-slate-400 hover:text-red-600 shadow-sm"><i data-lucide="x" class="w-3 h-3"></i></button>
+                    </div>
+                </div>
+
+                <!-- Project Row 2 (Muted) -->
+                <div class="relative h-12 flex items-center group opacity-60">
+                     <div class="absolute left-[25%] w-[15%] h-8 bg-slate-100 border border-slate-400 cursor-move flex items-center justify-center border-dashed">
+                        <span class="text-xs font-bold text-slate-500">MAINT_02 [MUTED]</span>
+                    </div>
+                </div>
+
+                <!-- Project Row 3 (Warning) -->
+                <div class="relative h-12 flex items-center group">
+                    <div class="absolute left-[5%] w-[60%] h-8 bg-white border border-amber-600 hover:bg-amber-50 cursor-move flex items-center px-2 shadow-[2px_2px_0px_rgba(217,119,6,0.2)]">
+                        <div class="h-full w-1 bg-amber-600 mr-2"></div>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-bold text-amber-800">INFRA_UPGRADE</span>
+                            <span class="text-[9px] text-amber-700">P:50 | C:1.0x</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Hover Info (Tooltip) -->
+                    <div class="hidden group-hover:block absolute left-[66%] top-0 z-50 bg-white border border-amber-500 p-2 text-[10px] w-48 shadow-lg">
+                        <table class="w-full text-left">
+                            <tr><th class="text-slate-500">START:</th> <td>2026-07-12</td></tr>
+                            <tr><th class="text-slate-500">END:</th> <td>2026-08-01</td></tr>
+                            <tr><th class="text-slate-500">LOAD:</th> <td class="text-amber-600 font-bold">CRITICAL</td></tr>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Current Time Indicator -->
+                <div class="absolute top-0 bottom-0 left-[14.28%] w-px bg-amber-600 shadow-[0_0_4px_rgba(245,158,11,0.4)] z-0 pointer-events-none"></div>
+
+            </div>
+
+             <!-- ADD Button (Corner) -->
+             <button class="absolute bottom-6 right-6 bg-amber-500 hover:bg-amber-400 text-white font-bold px-4 py-3 shadow-lg shadow-amber-900/20 flex items-center gap-2 border border-amber-600">
+                <i data-lucide="plus" class="w-4 h-4"></i> ADD PROJECT
+            </button>
+        </div>
+    </main>
+
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>
