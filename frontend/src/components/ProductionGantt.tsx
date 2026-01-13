@@ -471,7 +471,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         monthPositions={monthPositions}
       />
 
-      <HoverCard>
+      <HoverCard open={dragInfo ? false : undefined}>
         <HoverCardTrigger asChild>
           <div
             className="gantt-header grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
@@ -633,14 +633,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                         className="gantt-bars-container relative h-full"
                       >
                         {dragFeedback && dragInfo?.projectId === project.id && (
-                          <div className="absolute top-0 bottom-0 z-20 pointer-events-none" style={{ left: `${dragFeedback.left}px` }}>
-                            <div className="h-full border-l-2 border-destructive border-dashed"></div>
-                            <div className="absolute -top-6 bg-destructive text-destructive-foreground text-xs px-2 py-1 rounded whitespace-nowrap">
+                          <div className="absolute top-0 bottom-0 z-50 pointer-events-none" style={{ left: `${dragFeedback.left}px` }}>
+                            <div className="h-full w-px bg-primary/75"></div>
+                            <div className="absolute -top-2 left-0 -translate-x-1/2 -translate-y-full bg-popover text-popover-foreground text-xs font-mono px-2.5 py-1.5 rounded-md border border-primary/20 shadow-md whitespace-nowrap">
                               {dragFeedback.date}
                             </div>
                           </div>
                         )}
-                         <HoverCard>
+                         <HoverCard open={dragInfo ? false : undefined}>
                            <HoverCardTrigger asChild>
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
