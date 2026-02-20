@@ -281,7 +281,9 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
           const fill = point.isActive ? "var(--card)" : "transparent";
           const strokeOpacity = point.isActive ? 1 : 0.6;
           const showPreview =
-            hoveredKey === point.key || draggingKey === point.key;
+            point.isActive ||
+            hoveredKey === point.key ||
+            draggingKey === point.key;
           const previewValue = Math.round(point.rate);
 
           return (
