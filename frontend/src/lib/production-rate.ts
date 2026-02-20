@@ -33,29 +33,13 @@ export const interpolateRate = (
   const time = date.getTime();
 
   const first = sorted[0];
-  const second = sorted[1];
-  const firstSlope =
-    second.month.getTime() === first.month.getTime()
-      ? 0
-      : (second.rate - first.rate) /
-        (second.month.getTime() - first.month.getTime());
-
   if (time <= first.month.getTime()) {
-    return Math.max(
-      0,
-      first.rate + (time - first.month.getTime()) * firstSlope
-    );
+    return Math.max(0, first.rate);
   }
 
   const last = sorted[sorted.length - 1];
-  const prev = sorted[sorted.length - 2];
-  const lastSlope =
-    last.month.getTime() === prev.month.getTime()
-      ? 0
-      : (last.rate - prev.rate) / (last.month.getTime() - prev.month.getTime());
-
   if (time >= last.month.getTime()) {
-    return Math.max(0, last.rate + (time - last.month.getTime()) * lastSlope);
+    return Math.max(0, last.rate);
   }
 
   for (let i = 0; i < sorted.length - 1; i += 1) {

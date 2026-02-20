@@ -471,7 +471,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         monthPositions={monthPositions}
       />
 
-      <HoverCard open={dragInfo ? false : undefined}>
+      <HoverCard>
         <HoverCardTrigger asChild>
           <div
             className="gantt-header grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
@@ -640,7 +640,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                             </div>
                           </div>
                         )}
-                         <HoverCard open={dragInfo ? false : undefined}>
+                         <HoverCard>
                            <HoverCardTrigger asChild>
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
@@ -675,7 +675,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                        style={{
                                          left: '100%',
                                          top: '50%',
-                                         transform: 'translate(6px, -50%)',
+                                         transform: 'translate(15px, -50%)',
                                        }}
                                      >
                                        {project.name}

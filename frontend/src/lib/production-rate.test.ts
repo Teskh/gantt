@@ -21,16 +21,13 @@ describe("interpolateRate", () => {
     expect(value).toBeCloseTo(150, 5);
   });
 
-  it("extrapolates using the nearest segment slope", () => {
+  it("keeps the first and last point flat outside the active range", () => {
     const pointA = { month: new Date(2024, 0, 1), rate: 100, isActive: true };
     const pointB = { month: new Date(2024, 0, 11), rate: 200, isActive: true };
-    const slope =
-      (pointB.rate - pointA.rate) /
-      (pointB.month.getTime() - pointA.month.getTime());
     const before = new Date(pointA.month.getTime() - 5 * msPerDay);
-    const expected = pointA.rate + (before.getTime() - pointA.month.getTime()) * slope;
+    const after = new Date(pointB.month.getTime() + 5 * msPerDay);
 
-    const value = interpolateRate(before, [pointA, pointB]);
-    expect(value).toBeCloseTo(expected, 5);
+    expect(interpolateRate(before, [pointA, pointB])).toBe(100);
+    expect(interpolateRate(after, [pointA, pointB])).toBe(200);
   });
 });
