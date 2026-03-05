@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+
 import './App.css'
 import { ProductionGantt } from './components/ProductionGantt'
 import { ProjectModal } from './components/ProjectModal'
@@ -6,6 +7,13 @@ import { ScenarioManager, type Scenario } from './components/ScenarioManager'
 import { ThemeProvider } from './components/theme-provider'
 import { apiFetch, apiUrl } from './lib/api'
 import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
+// Change this value to rotate the hardcoded edit password.
+const EDIT_PASSWORD = 'gantt';
+const EDIT_UNLOCK_DURATION_HOURS = 4;
+const EDIT_UNLOCK_DURATION_MS = EDIT_UNLOCK_DURATION_HOURS * 60 * 60 * 1000;
+const EDIT_UNLOCK_STORAGE_KEY = 'gantt.editUnlockUntil';
+const EDIT_ACCESS_DENIED_MESSAGE = 'Edicion bloqueada. Usa el candado en la esquina superior derecha.';
+
 export interface Project {
   id: number;
   name: string;
@@ -40,6 +48,52 @@ function App() {
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
 
+  const [unlockUntilMs, setUnlockUntilMs] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const isEditUnlocked = unlockUntilMs !== null && nowMs < unlockUntilMs;
+  const unlockRemainingMinutes = isEditUnlocked && unlockUntilMs
+    ? Math.max(0, Math.ceil((unlockUntilMs - nowMs) / (60 * 1000)))
+    : 0;
+
+  const persistUnlockUntil = (nextUnlockUntilMs: number | null) => {
+    setUnlockUntilMs(nextUnlockUntilMs);
+    setNowMs(Date.now());
+    if (nextUnlockUntilMs === null) {
+      window.localStorage.removeItem(EDIT_UNLOCK_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(EDIT_UNLOCK_STORAGE_KEY, String(nextUnlockUntilMs));
+  };
+
+  const ensureEditAccess = (silent = false): boolean => {
+    if (isEditUnlocked) return true;
+    if (!silent) {
+      alert(EDIT_ACCESS_DENIED_MESSAGE);
+    }
+    return false;
+  };
+
+  const handleEditLockToggle = () => {
+    if (isEditUnlocked) {
+      persistUnlockUntil(null);
+      setProjectModalOpen(false);
+      setActiveProject(null);
+      setIsEditingScenarioName(false);
+      setScenarioNameDraft(activeScenario?.name ?? '');
+      return;
+    }
+
+    const enteredPassword = window.prompt('Ingrese la contrasena para editar:');
+    if (enteredPassword === null) return;
+    if (enteredPassword !== EDIT_PASSWORD) {
+      alert('Contrasena incorrecta.');
+      return;
+    }
+    persistUnlockUntil(Date.now() + EDIT_UNLOCK_DURATION_MS);
+    alert(`Edicion habilitada por ${EDIT_UNLOCK_DURATION_HOURS} horas.`);
+  };
+
   const formatMonthValue = (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
@@ -50,6 +104,7 @@ function App() {
   };
 
   const handleRangeStartChange = (value: string) => {
+    if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
     setRangeStart(parsed);
@@ -59,6 +114,7 @@ function App() {
   };
 
   const handleRangeEndChange = (value: string) => {
+    if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
     if (parsed < rangeStart) {
@@ -81,6 +137,33 @@ function App() {
         setIsRangeLoaded(true);
       });
   }, []);
+
+  useEffect(() => {
+    const storedUnlockUntil = window.localStorage.getItem(EDIT_UNLOCK_STORAGE_KEY);
+    if (!storedUnlockUntil) return;
+    const parsedUnlockUntil = Number(storedUnlockUntil);
+    if (!Number.isFinite(parsedUnlockUntil) || parsedUnlockUntil <= Date.now()) {
+      window.localStorage.removeItem(EDIT_UNLOCK_STORAGE_KEY);
+      return;
+    }
+    setUnlockUntilMs(parsedUnlockUntil);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!unlockUntilMs || nowMs < unlockUntilMs) return;
+    persistUnlockUntil(null);
+    setProjectModalOpen(false);
+    setActiveProject(null);
+    setIsEditingScenarioName(false);
+    setScenarioNameDraft(activeScenario?.name ?? '');
+  }, [unlockUntilMs, nowMs, activeScenario]);
 
   useEffect(() => {
     if (!isRangeLoaded) return;
@@ -144,6 +227,7 @@ function App() {
   }, [activeScenario]);
 
   const handleProjectUpdate = (projectId: number, newStart: Date) => {
+    if (!ensureEditAccess(true)) return;
     setProjects(currentProjects =>
       currentProjects.map(p =>
         p.id === projectId ? { ...p, start: newStart } : p
@@ -157,6 +241,12 @@ function App() {
   };
 
   const handleScenarioNameSave = () => {
+    if (!ensureEditAccess()) {
+      setIsEditingScenarioName(false)
+      setScenarioNameDraft(activeScenario?.name ?? '')
+      return
+    }
+
     const trimmed = scenarioNameDraft.trim()
 
     if (!trimmed) { // If the name is empty after trimming, just exit edit mode
@@ -186,6 +276,7 @@ function App() {
   };
 
   const handleScenarioNameEditStart = () => {
+    if (!ensureEditAccess()) return;
     setScenarioNameDraft(activeScenario?.name ?? 'Nuevo Escenario');
     setIsEditingScenarioName(true);
   };
@@ -197,6 +288,7 @@ function App() {
 
   // ---------------- Project CRUD helpers ----------------
   const handleProjectMuteToggle = (projectId: number) => {
+    if (!ensureEditAccess(true)) return;
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
 
@@ -215,6 +307,7 @@ function App() {
   };
 
   const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
+    if (!ensureEditAccess(true)) return;
     fetch(apiUrl(`/api/projects/${projectId}/${action}`), {
       method: 'POST',
     })
@@ -242,6 +335,7 @@ function App() {
   };
 
   const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
+    if (!ensureEditAccess()) return;
     if (!activeScenario) return;
     fetch(apiUrl('/api/projects'), {
       method: 'POST',
@@ -256,6 +350,7 @@ function App() {
   };
 
   const handleProjectDelete = (id: number) => {
+    if (!ensureEditAccess()) return;
     fetch(apiUrl(`/api/projects/${id}`), { method: 'DELETE' })
       .then(() => {
         setProjects(prev => prev.filter(p => p.id !== id));
@@ -264,6 +359,7 @@ function App() {
   };
 
   const handleProjectChange = (updated: Project) => {
+    if (!ensureEditAccess()) return;
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
     fetch(apiUrl(`/api/projects/${updated.id}`), {
       method: 'PUT',
@@ -280,12 +376,14 @@ function App() {
   };
 
   const handleCreateProjectAtDate = (startDate: Date) => {
+    if (!ensureEditAccess()) return;
     setInitialDate(startDate);
     setActiveProject(null);
     setProjectModalOpen(true);
   };
 
   const handleEditProject = (project: Project) => {
+    if (!ensureEditAccess()) return;
     setActiveProject(project);
     setProjectModalOpen(true);
   };
@@ -297,6 +395,7 @@ function App() {
     priority: number,
     start: Date
   ) => {
+    if (!ensureEditAccess()) return;
     if (activeProject) {
       handleProjectChange({
         ...activeProject,
@@ -314,10 +413,12 @@ function App() {
   };
 
   const handleProductionRateUpdate = (points: ProductionRatePoint[]) => {
+    if (!ensureEditAccess(true)) return;
     setProductionRatePoints(points);
   };
 
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
+    if (!ensureEditAccess(true)) return;
     if (!activeScenario) return;
     setProductionRatePoints(points);
     fetch(apiUrl(`/api/production-rate-points?scenarioId=${activeScenario.id}`), {
@@ -341,6 +442,7 @@ function App() {
   };
 
   const handleScenarioCreate = (nameFromInput?: string) => {
+    if (!ensureEditAccess()) return;
     const name = nameFromInput || window.prompt('Ingrese el nombre del nuevo escenario:', 'Nuevo Escenario');
     if (!name) return;
 
@@ -358,6 +460,7 @@ function App() {
   };
 
   const handleScenarioCopy = (scenarioId: number) => {
+    if (!ensureEditAccess()) return;
     fetch(apiUrl(`/api/scenarios/${scenarioId}/copy`), { method: 'POST' })
       .then(res => res.json())
       .then((newScenario: Scenario) => {
@@ -368,6 +471,7 @@ function App() {
   };
 
   const handleScenarioDelete = (scenarioId: number) => {
+    if (!ensureEditAccess()) return;
     if (scenarios.length <= 1) {
       alert('No se puede eliminar el último escenario.');
       return;
@@ -407,6 +511,9 @@ function App() {
           rangeEnd={formatMonthValue(rangeEnd)}
           onRangeStartChange={handleRangeStartChange}
           onRangeEndChange={handleRangeEndChange}
+          isEditUnlocked={isEditUnlocked}
+          unlockRemainingMinutes={unlockRemainingMinutes}
+          onEditLockToggle={handleEditLockToggle}
         />
         <main className="flex flex-col flex-grow min-h-0">
           {activeScenario ? (
@@ -423,6 +530,7 @@ function App() {
               onProjectReorder={handleProjectReorder}
               rangeStart={rangeStart}
               rangeEnd={rangeEnd}
+              isEditingEnabled={isEditUnlocked}
             />
           ) : (
             <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>
@@ -435,6 +543,7 @@ function App() {
             initialDate={initialDate}
             onCancel={() => setProjectModalOpen(false)}
             onSubmit={handleModalSubmit}
+            canEdit={isEditUnlocked}
           />
         </main>
       </div>
@@ -443,3 +552,8 @@ function App() {
 }                                                                                                                                                                                                                   
                                                                                                                                                                                                                     
 export default App
+
+
+
+
+

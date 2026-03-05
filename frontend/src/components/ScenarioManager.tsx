@@ -7,7 +7,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, Copy, PlusSquare, Trash } from 'lucide-react';
+import { ChevronDown, Copy, Lock, LockOpen, PlusSquare, Trash } from 'lucide-react';
 import { ModeToggle } from './ui/mode-toggle';
 
 export interface Scenario {
@@ -32,6 +32,9 @@ interface ScenarioManagerProps {
   rangeEnd: string;
   onRangeStartChange: (value: string) => void;
   onRangeEndChange: (value: string) => void;
+  isEditUnlocked: boolean;
+  unlockRemainingMinutes: number;
+  onEditLockToggle: () => void;
 }
 
 export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
@@ -51,6 +54,9 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
   rangeEnd,
   onRangeStartChange,
   onRangeEndChange,
+  isEditUnlocked,
+  unlockRemainingMinutes,
+  onEditLockToggle,
 }) => {
   const handleCopy = () => {
     if (activeScenario) {
@@ -89,8 +95,11 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
           ) : (
             <div className="flex h-8 w-64 items-center justify-between text-foreground">
               <span
-                className="flex-grow cursor-pointer truncate px-2 text-sm"
-                onClick={onScenarioNameEditStart}
+                className={`flex-grow truncate px-2 text-sm ${isEditUnlocked ? 'cursor-pointer' : 'cursor-not-allowed text-muted-foreground'}`}
+                onClick={() => {
+                  if (!isEditUnlocked) return;
+                  onScenarioNameEditStart();
+                }}
               >
                 {activeScenario?.name ?? 'Seleccionar un escenario'}
               </span>
@@ -119,7 +128,7 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             type="button"
             className="h-8 w-8 border-l border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
             onClick={handleCopy}
-            disabled={!activeScenario}
+            disabled={!activeScenario || !isEditUnlocked}
           >
             <Copy className="mx-auto h-3.5 w-3.5" />
           </button>
@@ -127,14 +136,15 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             type="button"
             className="h-8 w-8 border-l border-border text-muted-foreground hover:text-red-600 disabled:opacity-40"
             onClick={handleDelete}
-            disabled={!activeScenario}
+            disabled={!activeScenario || !isEditUnlocked}
           >
             <Trash className="mx-auto h-3.5 w-3.5" />
           </button>
           <button
             type="button"
-            className="h-8 w-8 border-l border-border text-muted-foreground hover:text-foreground"
+            className="h-8 w-8 border-l border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
             onClick={() => onScenarioCreate()}
+            disabled={!isEditUnlocked}
           >
             <PlusSquare className="mx-auto h-3.5 w-3.5" />
           </button>
@@ -149,20 +159,30 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
               type="month"
               value={rangeStart}
               onChange={(e) => onRangeStartChange(e.target.value)}
-              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60"
+              disabled={!isEditUnlocked}
+              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60 disabled:cursor-not-allowed disabled:opacity-60"
             />
             <span>→</span>
             <input
               type="month"
               value={rangeEnd}
               onChange={(e) => onRangeEndChange(e.target.value)}
-              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60"
+              disabled={!isEditUnlocked}
+              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60 disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
         </div>
-
       </div>
       <div className="flex items-center gap-3 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <button
+          type="button"
+          onClick={onEditLockToggle}
+          className={`inline-flex h-8 items-center gap-1 rounded border px-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isEditUnlocked ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}
+          title={isEditUnlocked ? `Edicion habilitada por ${unlockRemainingMinutes} min` : 'Edicion bloqueada'}
+        >
+          {isEditUnlocked ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+          <span>{isEditUnlocked ? `${unlockRemainingMinutes}m` : 'Bloq'}</span>
+        </button>
         <ModeToggle />
       </div>
     </header>

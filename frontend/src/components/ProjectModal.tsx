@@ -7,14 +7,16 @@ interface ProjectModalProps {
   initialDate: Date;
   onSubmit: (name: string, m2: number, gg: number, priority: number, start: Date) => void;
   onCancel: () => void;
+  canEdit: boolean;
 }
 
-export const ProjectModal: React.FC<ProjectModalProps> = ({ 
-  open, 
-  project, 
-  initialDate, 
-  onSubmit, 
-  onCancel 
+export const ProjectModal: React.FC<ProjectModalProps> = ({
+  open,
+  project,
+  initialDate,
+  onSubmit,
+  onCancel,
+  canEdit,
 }) => {
   const formatDateInput = (d: Date) => d.toISOString().split('T')[0];
 
@@ -23,7 +25,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   const [ggStr, setGgStr] = useState(project?.gg?.toString() || '4.5');
   const [priorityStr, setPriorityStr] = useState(project?.priority?.toString() || '10');
   const [startStr, setStartStr] = useState(formatDateInput(initialDate));
-  
+
   useEffect(() => {
     if (project) {
       setName(project.name);
@@ -47,24 +49,32 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
         <h2 className="text-xl font-bold mb-4 text-foreground">
           {project ? 'Editar Proyecto' : 'Agregar Nuevo Proyecto'}
         </h2>
-        
+
+        {!canEdit && (
+          <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+            Edicion bloqueada. Usa el candado para habilitar cambios.
+          </div>
+        )}
+
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-foreground">Nombre del Proyecto</label>
           <input
             type="text"
-            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={name}
             onChange={e => setName(e.target.value)}
+            disabled={!canEdit}
           />
         </div>
-        
+
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-foreground">Tamaño (m²)</label>
           <input
             type="number"
-            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={m2}
             onChange={e => setM2(e.target.value)}
+            disabled={!canEdit}
           />
         </div>
 
@@ -73,9 +83,10 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <input
             type="number"
             step="0.1"
-            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={ggStr}
             onChange={e => setGgStr(e.target.value)}
+            disabled={!canEdit}
           />
         </div>
 
@@ -83,25 +94,27 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <label className="block text-sm font-medium mb-1 text-foreground">Prioridad</label>
           <input
             type="number"
-            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={priorityStr}
             min="1"
             onChange={e => setPriorityStr(e.target.value)}
+            disabled={!canEdit}
           />
         </div>
-        
+
         {!project && (
           <div className="mb-4">
             <label className="block text-sm font-medium mb-1 text-foreground">Fecha de Inicio</label>
             <input
               type="date"
-              className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none"
+              className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
               value={startStr}
               onChange={e => setStartStr(e.target.value)}
+              disabled={!canEdit}
             />
           </div>
         )}
-        
+
         <div className="flex justify-end space-x-2">
           <button
             className="px-4 py-2 border rounded bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -110,8 +123,10 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             Cancelar
           </button>
           <button
-            className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+            className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed"
+            disabled={!canEdit}
             onClick={() => {
+              if (!canEdit) return;
               const parsedM2 = parseInt(m2, 10);
               const parsedGg = parseFloat(ggStr);
               const parsedPriority = parseInt(priorityStr, 10);

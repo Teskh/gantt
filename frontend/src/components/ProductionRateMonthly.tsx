@@ -14,6 +14,7 @@ interface ProductionRateMonthlyProps {
   rateView: "daily" | "weekly" | "monthly" | "yearly";
   onRateViewChange: (view: "daily" | "weekly" | "monthly" | "yearly") => void;
   monthPositions: Array<{ key: string; date: Date; width: number; x: number }>;
+  isEditingEnabled: boolean;
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -34,6 +35,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   rateView,
   onRateViewChange,
   monthPositions,
+  isEditingEnabled,
 }) => {
   const series = useMemo(
     () => buildMonthlySeries(points, minMonth, maxMonth),
@@ -139,6 +141,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
 
   const applyRateChange = useCallback(
     (key: string, clientY: number) => {
+      if (!isEditingEnabled) return;
       const nextRate = rateFromClientY(clientY);
       const base = lastUpdatedRef.current ?? series;
       const updated = base.map((point) =>
@@ -149,7 +152,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
       lastUpdatedRef.current = updated;
       onPointsChange(updated);
     },
-    [rateFromClientY, series, onPointsChange]
+    [isEditingEnabled, rateFromClientY, series, onPointsChange]
   );
 
   const finishDrag = useCallback(() => {
@@ -183,6 +186,13 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     }
   }, [series, draggingKey]);
 
+  useEffect(() => {
+    if (isEditingEnabled) return;
+    setDraggingKey(null);
+    setHoveredKey(null);
+    lastUpdatedRef.current = null;
+  }, [isEditingEnabled]);
+
   const unitLabel =
     rateView === "daily"
       ? "m2/dia"
@@ -200,6 +210,11 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
       <span className="absolute left-3 top-3 z-10 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600">
         CAPACIDAD DE PRODDUCION [{unitLabel}]
       </span>
+      {!isEditingEnabled && (
+        <span className="absolute left-3 top-9 z-10 border border-border bg-background/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Edicion bloqueada
+        </span>
+      )}
       <nav className="absolute right-3 top-3 z-10 inline-flex items-center gap-px border border-border bg-background text-[10px] font-bold">
         {(["daily", "weekly", "monthly", "yearly"] as const).map((view) => (
           <button
@@ -312,20 +327,28 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
                 stroke="var(--chart-1)"
                 strokeWidth={2}
                 strokeOpacity={strokeOpacity}
-                className="cursor-ns-resize transition-colors"
-                onPointerEnter={() => setHoveredKey(point.key)}
+                className={cn(
+                  "transition-colors",
+                  isEditingEnabled ? "cursor-ns-resize" : "cursor-default"
+                )}
+                onPointerEnter={() => {
+                  if (!isEditingEnabled) return;
+                  setHoveredKey(point.key);
+                }}
                 onPointerLeave={() => {
                   if (!draggingKey) {
                     setHoveredKey(null);
                   }
                 }}
                 onPointerDown={(event) => {
+                  if (!isEditingEnabled) return;
                   event.preventDefault();
                   setDraggingKey(point.key);
                   setHoveredKey(point.key);
                   applyRateChange(point.key, event.clientY);
                 }}
                 onDoubleClick={(event) => {
+                  if (!isEditingEnabled) return;
                   event.preventDefault();
                   event.stopPropagation();
                   if (!point.isActive) return;
@@ -345,3 +368,4 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     </div>
   );
 };
+

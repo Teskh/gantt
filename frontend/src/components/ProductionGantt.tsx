@@ -14,6 +14,7 @@ import {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSub,
   ContextMenuSubTrigger,
   ContextMenuSubContent,
@@ -35,6 +36,7 @@ interface ProductionGanttProps {
   onProjectReorder: (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => void;
   rangeStart: Date;
   rangeEnd: Date;
+  isEditingEnabled: boolean;
 }
 
 const addDays = (date: Date, days: number): Date => {
@@ -61,6 +63,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   onProjectReorder,
   rangeStart,
   rangeEnd,
+  isEditingEnabled,
 }) => {
   const [contextMenuProject, setContextMenuProject] = useState<Project | null>(null);
   const [contextMenuDate, setContextMenuDate] = useState<Date | null>(null);
@@ -116,14 +119,21 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   );
 
   const handleDisplayedPointsChange = (points: ProductionRatePoint[]) => {
+    if (!isEditingEnabled) return;
     onProductionRatePointsChange(toDailyPoints(points));
   };
 
   const handleDisplayedPointsSave = (points: ProductionRatePoint[]) => {
+    if (!isEditingEnabled) return;
     onProductionRatePointsSave?.(toDailyPoints(points));
   };
 
   const handleProjectAction = (action: 'add' | 'edit' | 'delete') => {
+    if (!isEditingEnabled) {
+      setContextMenuProject(null);
+      setContextMenuDate(null);
+      return;
+    }
     if (action === 'add') {
       const date = contextMenuDate ?? contextMenuProject?.start ?? new Date();
       onCreateProjectAtDate(date);
@@ -139,6 +149,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const handleMuteToggle = () => {
+    if (!isEditingEnabled) return;
     if (contextMenuProject) {
       onProjectMuteToggle(contextMenuProject.id);
     }
@@ -147,6 +158,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const handleReorder = (action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
+    if (!isEditingEnabled) return;
     if (contextMenuProject) {
       onProjectReorder(contextMenuProject.id, action);
     }
@@ -406,6 +418,10 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   }, [calculatedProjects, dayWidth, minDate]);
 
   const handleDragStart = (e: React.DragEvent, projectId: number) => {
+    if (!isEditingEnabled) {
+      e.preventDefault();
+      return;
+    }
     const barElement = e.currentTarget as HTMLDivElement;
     const offset = e.clientX - barElement.getBoundingClientRect().left;
     e.dataTransfer.setData("application/json", JSON.stringify({ projectId, dragOffset: offset }));
@@ -414,6 +430,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (!isEditingEnabled) return;
     e.preventDefault();
     if (!dragInfo) return;
 
@@ -434,6 +451,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    if (!isEditingEnabled) return;
     e.preventDefault();
     const data = e.dataTransfer.getData("application/json");
     if (!data) return;
@@ -456,6 +474,12 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     setDragFeedback(null);
   };
 
+  useEffect(() => {
+    if (isEditingEnabled) return;
+    setDragInfo(null);
+    setDragFeedback(null);
+  }, [isEditingEnabled]);
+
   return (
     <div className="flex min-h-full flex-col">
       <ProductionRateMonthly
@@ -469,6 +493,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         rateView={rateView}
         onRateViewChange={setRateView}
         monthPositions={monthPositions}
+        isEditingEnabled={isEditingEnabled}
       />
 
       <HoverCard>
@@ -652,12 +677,13 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              >
                                {/* This inner div is the actual draggable element */}
                                <div
-                                 draggable
-                                 onDoubleClick={() => onProjectMuteToggle(project.id)}
+                                 draggable={isEditingEnabled}
+                                 onDoubleClick={() => { if (!isEditingEnabled) return; onProjectMuteToggle(project.id); }}
                                  onDragStart={(e) => handleDragStart(e, project.id)}
                                  onDragEnd={() => { setDragInfo(null); setDragFeedback(null); }}
                                  className={cn(
-                                   "h-full w-full cursor-move border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                   "h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                    isEditingEnabled ? "cursor-move" : "cursor-default",
                                    project.muted
                                      ? "project-bar-muted border-dashed"
                                      : "project-bar"
@@ -718,20 +744,28 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
 
                 {calculatedProjects.length === 0 && (
                   <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-                    No hay proyectos para mostrar. Haz clic derecho para añadir un proyecto.
+                    {isEditingEnabled
+                      ? 'No hay proyectos para mostrar. Haz clic derecho para anadir un proyecto.'
+                      : 'No hay proyectos para mostrar. Desbloquea para editar.'}
                   </div>
                 )}
               </div>
             </ContextMenuTrigger>
           <ContextMenuContent className="w-48">
+            {!isEditingEnabled && (
+              <>
+                <ContextMenuLabel>Edicion bloqueada</ContextMenuLabel>
+                <ContextMenuSeparator />
+              </>
+            )}
             <>
-              <ContextMenuItem onClick={() => handleProjectAction('add')}>
+              <ContextMenuItem onClick={() => handleProjectAction('add')} disabled={!isEditingEnabled}>
                 <PlusCircle />
                 Añadir proyecto
               </ContextMenuItem>
               {contextMenuProject && (
                 <>
-                  <ContextMenuItem onClick={() => handleProjectAction('edit')}>
+                  <ContextMenuItem onClick={() => handleProjectAction('edit')} disabled={!isEditingEnabled}>
                     <Pencil />
                     Editar proyecto
                   </ContextMenuItem>
@@ -741,26 +775,26 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                       Cambiar orden
                     </ContextMenuSubTrigger>
                     <ContextMenuSubContent className="w-48">
-                      <ContextMenuItem onClick={() => handleReorder('move-to-top')}>
+                      <ContextMenuItem onClick={() => handleReorder('move-to-top')} disabled={!isEditingEnabled}>
                         <ArrowUpToLine className="mr-2" />
                         Mover al inicio
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleReorder('move-up')}>
+                      <ContextMenuItem onClick={() => handleReorder('move-up')} disabled={!isEditingEnabled}>
                         <ArrowUp className="mr-2" />
                         Mover hacia arriba
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleReorder('move-down')}>
+                      <ContextMenuItem onClick={() => handleReorder('move-down')} disabled={!isEditingEnabled}>
                         <ArrowDown className="mr-2" />
                         Mover hacia abajo
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleReorder('move-to-bottom')}>
+                      <ContextMenuItem onClick={() => handleReorder('move-to-bottom')} disabled={!isEditingEnabled}>
                         <ArrowDownToLine className="mr-2" />
                         Mover al fondo
                       </ContextMenuItem>
                     </ContextMenuSubContent>
                   </ContextMenuSub>
                   <ContextMenuSeparator />
-                  <ContextMenuItem onClick={handleMuteToggle}>
+                  <ContextMenuItem onClick={handleMuteToggle} disabled={!isEditingEnabled}>
                     {contextMenuProject.muted ? (
                       <>
                         <Volume2 />
@@ -776,6 +810,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   <ContextMenuItem
                     onClick={() => handleProjectAction('delete')}
                     variant="destructive"
+                    disabled={!isEditingEnabled}
                   >
                     <Trash2 />
                     Eliminar proyecto
@@ -788,3 +823,15 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     </div>
   );
 };
+
+
+
+
+
+
+
+
+
+
+
+
