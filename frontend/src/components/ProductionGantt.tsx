@@ -50,6 +50,26 @@ const getRateForDate = (
   activePoints: ProductionRatePoint[]
 ): number => interpolateRate(date, activePoints);
 
+const getReadableTextColor = (hexColor: string): string => {
+  const normalized = hexColor.replace('#', '');
+  const red = parseInt(normalized.slice(0, 2), 16);
+  const green = parseInt(normalized.slice(2, 4), 16);
+  const blue = parseInt(normalized.slice(4, 6), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.58 ? '#0f172a' : '#ffffff';
+};
+
+const getProjectBarStyle = (project: Project): React.CSSProperties => {
+  if (!project.color || project.muted) return {};
+
+  return {
+    backgroundColor: project.color,
+    borderColor: project.color,
+    color: getReadableTextColor(project.color),
+    boxShadow: `2px 2px 0 color-mix(in srgb, ${project.color} 28%, transparent)`,
+  };
+};
+
 export const ProductionGantt: React.FC<ProductionGanttProps> = ({ 
   projects, 
   productionRatePoints, 
@@ -371,6 +391,46 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     return boundaries;
   }, [monthHeaders]);
 
+  const noProductionGaps = useMemo(() => {
+    if (dayWidth <= 0 || calculatedProjects.length === 0) return [];
+
+    const dayMs = 1000 * 3600 * 24;
+    const minTime = minDate.getTime();
+    const maxTime = maxDate.getTime();
+    const activeIntervals = calculatedProjects
+      .filter((project) => !project.muted)
+      .map((project) => ({
+        start: Math.max(project.start.getTime(), minTime),
+        end: Math.min(project.end.getTime(), maxTime),
+      }))
+      .filter((interval) => interval.end >= minTime && interval.start <= maxTime)
+      .sort((a, b) => a.start - b.start);
+
+    if (activeIntervals.length === 0) return [];
+
+    const gaps: { left: number; width: number }[] = [];
+    let cursor = minTime;
+
+    activeIntervals.forEach((interval) => {
+      if (interval.start > cursor) {
+        gaps.push({
+          left: ((cursor - minTime) / dayMs) * dayWidth,
+          width: ((interval.start - cursor) / dayMs) * dayWidth,
+        });
+      }
+      cursor = Math.max(cursor, interval.end + dayMs);
+    });
+
+    if (cursor <= maxTime) {
+      gaps.push({
+        left: ((cursor - minTime) / dayMs) * dayWidth,
+        width: (((maxTime - cursor) / dayMs) + 1) * dayWidth,
+      });
+    }
+
+    return gaps.filter((gap) => gap.width >= 1);
+  }, [calculatedProjects, dayWidth, minDate, maxDate]);
+
   // --- Project summary for header hover ---------------------------------------------------------
   const projectSummary = useMemo(() => {
     // Ignore muted projects when calculating the summary
@@ -392,7 +452,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   }, [calculatedProjects]);
 
 
-  const rowHeight = 40; // pixels
+  const rowHeight = 28; // pixels
   const textMeasureRef = useRef<HTMLSpanElement>(null);
 
   // Measure text widths for all projects
@@ -627,6 +687,17 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
             onContextMenu={handleContainerContextMenu}
           >
             <div className="absolute inset-0 pointer-events-none">
+              {noProductionGaps.map((gap, index) => (
+                <div
+                  key={`gap-${index}-${gap.left}`}
+                  className="gantt-no-production-gap absolute top-0 bottom-0"
+                  style={{
+                    left: `${gap.left}px`,
+                    width: `${gap.width}px`,
+                  }}
+                  title="Sin produccion"
+                />
+              ))}
               {monthBoundaries.slice(0, -1).map((position, index) => (
                 <div
                   key={`${position}-${index}`}
@@ -670,7 +741,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
                                className={cn(
-                                 'absolute h-3/5 top-1/2 -translate-y-1/2 text-xs select-none',
+                                 'absolute h-[22px] top-1/2 -translate-y-1/2 text-xs select-none',
                                  { 'opacity-50': project.muted }
                                )}
                                style={{ left: `${left}px`, width: `${width}px` }}
@@ -688,6 +759,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                      ? "project-bar-muted border-dashed"
                                      : "project-bar"
                                  )}
+                                 style={getProjectBarStyle(project)}
                                  data-project-id={project.id}
                                >
                                  {textFits ? (
@@ -697,7 +769,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  ) : (
                                    <div className="relative h-full w-full">
                                      <span
-                                       className="absolute font-bold text-foreground bg-card px-2 py-1 rounded-none shadow-sm border whitespace-nowrap z-10"
+                                       className="absolute font-bold text-foreground px-2 py-1 whitespace-nowrap z-10"
                                        style={{
                                          left: '100%',
                                          top: '50%',
@@ -726,6 +798,16 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  <span className="text-muted-foreground">Fin</span>
                                  <span className="font-semibold">{project.end.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
                                </div>
+                               {project.color && (
+                                 <div className="flex items-center gap-2 pt-1">
+                                   <span className="text-muted-foreground">Color</span>
+                                   <span
+                                     className="h-3 w-3 rounded-full border border-border"
+                                     style={{ backgroundColor: project.color }}
+                                   />
+                                   <span className="font-semibold">{project.color}</span>
+                                 </div>
+                               )}
                                <div className="pt-1">
                                  <p className="font-semibold">Duración</p>
                                  <div className="flex justify-between text-muted-foreground pt-1">

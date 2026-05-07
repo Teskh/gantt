@@ -6,6 +6,7 @@ const Database = require("better-sqlite3");
 
 const app = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 3005;
+const isLockEnabled = process.argv.includes("--locked");
 
 app.use(cors());
 app.use(express.json());
@@ -45,6 +46,11 @@ const compareMonthStrings = (start, end) => {
   return startIndex - endIndex;
 };
 
+const PROJECT_COLORS = new Set(["#0ea5e9", "#10b981", "#f59e0b", "#ef4444"]);
+
+const normalizeProjectColor = (value) =>
+  typeof value === "string" && PROJECT_COLORS.has(value) ? value : null;
+
 const initDb = () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scenarios (
@@ -67,6 +73,7 @@ const initDb = () => {
       start TEXT NOT NULL,
       muted INTEGER NOT NULL DEFAULT 0,
       display_order INTEGER NOT NULL DEFAULT 0,
+      color TEXT,
       scenario_id INTEGER NOT NULL,
       FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE
     );
@@ -81,6 +88,11 @@ const initDb = () => {
       FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE
     );
   `);
+
+  const projectColumns = db.prepare("PRAGMA table_info(projects)").all();
+  if (!projectColumns.some((column) => column.name === "color")) {
+    db.prepare("ALTER TABLE projects ADD COLUMN color TEXT").run();
+  }
 };
 
 const mapProject = (row) => ({
@@ -92,6 +104,7 @@ const mapProject = (row) => ({
   start: row.start,
   muted: Boolean(row.muted),
   displayOrder: row.display_order,
+  color: normalizeProjectColor(row.color),
   scenarioId: row.scenario_id,
 });
 
@@ -114,8 +127,8 @@ const seedDb = () => {
   const today = new Date();
   const start = today.toISOString().slice(0, 10);
   const projectStmt = db.prepare(`
-    INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, scenario_id)
-    VALUES (@name, @m2, @gg, @priority, @start, @muted, @display_order, @scenario_id)
+    INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, color, scenario_id)
+    VALUES (@name, @m2, @gg, @priority, @start, @muted, @display_order, @color, @scenario_id)
   `);
   projectStmt.run({
     name: "Project 1",
@@ -125,6 +138,7 @@ const seedDb = () => {
     start,
     muted: 0,
     display_order: 0,
+    color: "#0ea5e9",
     scenario_id: scenarioId,
   });
   projectStmt.run({
@@ -135,6 +149,7 @@ const seedDb = () => {
     start,
     muted: 0,
     display_order: 1,
+    color: "#10b981",
     scenario_id: scenarioId,
   });
   projectStmt.run({
@@ -145,6 +160,7 @@ const seedDb = () => {
     start,
     muted: 0,
     display_order: 2,
+    color: "#f59e0b",
     scenario_id: scenarioId,
   });
 
@@ -270,8 +286,8 @@ app.post("/api/scenarios/:id/copy", (req, res) => {
     .all(id);
 
   const insertProject = db.prepare(`
-    INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, scenario_id)
-    VALUES (@name, @m2, @gg, @priority, @start, @muted, @display_order, @scenario_id)
+    INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, color, scenario_id)
+    VALUES (@name, @m2, @gg, @priority, @start, @muted, @display_order, @color, @scenario_id)
   `);
   const insertRate = db.prepare(`
     INSERT INTO production_rate_points (scenario_id, month, rate, is_active)
@@ -288,6 +304,7 @@ app.post("/api/scenarios/:id/copy", (req, res) => {
         start: project.start,
         muted: project.muted,
         display_order: project.display_order,
+        color: project.color,
         scenario_id: newScenarioId,
       });
     });
@@ -320,6 +337,7 @@ app.get("/api/app-settings", (_req, res) => {
   res.json({
     rangeStart: settings.range_start.slice(0, 7),
     rangeEnd: settings.range_end.slice(0, 7),
+    isLockEnabled,
   });
 });
 
@@ -374,7 +392,7 @@ app.get("/api/projects", (req, res) => {
 });
 
 app.post("/api/projects", (req, res) => {
-  const { name, m2, start, gg, scenarioId, priority } = req.body;
+  const { name, m2, start, gg, scenarioId, priority, color } = req.body;
   if (!name || typeof m2 !== "number" || !start || !scenarioId) {
     return res
       .status(400)
@@ -388,8 +406,8 @@ app.post("/api/projects", (req, res) => {
 
   const result = db
     .prepare(
-      `INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, scenario_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, color, scenario_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       name,
@@ -399,6 +417,7 @@ app.post("/api/projects", (req, res) => {
       start,
       0,
       nextOrder,
+      normalizeProjectColor(color),
       scenarioId
     );
 
@@ -410,7 +429,7 @@ app.post("/api/projects", (req, res) => {
 
 app.put("/api/projects/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { name, m2, start, gg, displayOrder, muted, priority } = req.body;
+  const { name, m2, start, gg, displayOrder, muted, priority, color } = req.body;
   const data = {};
   if (name !== undefined) data.name = name;
   if (m2 !== undefined) data.m2 = m2;
@@ -419,6 +438,7 @@ app.put("/api/projects/:id", (req, res) => {
   if (displayOrder !== undefined) data.display_order = displayOrder;
   if (muted !== undefined) data.muted = muted ? 1 : 0;
   if (priority !== undefined) data.priority = priority;
+  if (color !== undefined) data.color = normalizeProjectColor(color);
 
   const fields = Object.keys(data);
   if (fields.length === 0) {

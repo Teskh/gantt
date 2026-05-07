@@ -32,6 +32,7 @@ interface ScenarioManagerProps {
   rangeEnd: string;
   onRangeStartChange: (value: string) => void;
   onRangeEndChange: (value: string) => void;
+  isLockEnabled: boolean;
   isEditUnlocked: boolean;
   unlockRemainingMinutes: number;
   onEditLockToggle: () => void;
@@ -54,6 +55,7 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
   rangeEnd,
   onRangeStartChange,
   onRangeEndChange,
+  isLockEnabled,
   isEditUnlocked,
   unlockRemainingMinutes,
   onEditLockToggle,
@@ -174,15 +176,17 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
         </div>
       </div>
       <div className="flex items-center gap-3 text-[10px] uppercase tracking-wide text-muted-foreground">
-        <button
-          type="button"
-          onClick={onEditLockToggle}
-          className={`inline-flex h-8 items-center gap-1 rounded border px-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isEditUnlocked ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}
-          title={isEditUnlocked ? `Edicion habilitada por ${unlockRemainingMinutes} min` : 'Edicion bloqueada'}
-        >
-          {isEditUnlocked ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-          <span>{isEditUnlocked ? `${unlockRemainingMinutes}m` : 'Bloq'}</span>
-        </button>
+        {isLockEnabled && (
+          <button
+            type="button"
+            onClick={onEditLockToggle}
+            className={`inline-flex h-8 items-center gap-1 rounded border px-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isEditUnlocked ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}
+            title={isEditUnlocked ? `Edicion habilitada por ${unlockRemainingMinutes} min` : 'Edicion bloqueada'}
+          >
+            {isEditUnlocked ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+            <span>{isEditUnlocked ? `${unlockRemainingMinutes}m` : 'Bloq'}</span>
+          </button>
+        )}
         <ModeToggle />
       </div>
     </header>

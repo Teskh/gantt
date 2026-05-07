@@ -23,6 +23,7 @@ export interface Project {
   priority?: number;
   muted: boolean;
   displayOrder: number;
+  color: string | null;
 }
 
 export interface ProductionRatePoint {
@@ -30,6 +31,16 @@ export interface ProductionRatePoint {
   rate: number;
   isActive: boolean;
 }
+
+const normalizeProject = (project: any): Project => ({
+  ...project,
+  start: new Date(project.start),
+  gg: project.gg ?? 4.5,
+  priority: project.priority ?? 10,
+  muted: project.muted ?? false,
+  displayOrder: project.displayOrder ?? 0,
+  color: typeof project.color === 'string' ? project.color : null,
+});
 
 function App() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
@@ -50,8 +61,10 @@ function App() {
 
   const [unlockUntilMs, setUnlockUntilMs] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [isLockEnabled, setIsLockEnabled] = useState(false);
 
   const isEditUnlocked = unlockUntilMs !== null && nowMs < unlockUntilMs;
+  const isEditingEnabled = !isLockEnabled || isEditUnlocked;
   const unlockRemainingMinutes = isEditUnlocked && unlockUntilMs
     ? Math.max(0, Math.ceil((unlockUntilMs - nowMs) / (60 * 1000)))
     : 0;
@@ -67,7 +80,7 @@ function App() {
   };
 
   const ensureEditAccess = (silent = false): boolean => {
-    if (isEditUnlocked) return true;
+    if (isEditingEnabled) return true;
     if (!silent) {
       alert(EDIT_ACCESS_DENIED_MESSAGE);
     }
@@ -75,6 +88,7 @@ function App() {
   };
 
   const handleEditLockToggle = () => {
+    if (!isLockEnabled) return;
     if (isEditUnlocked) {
       persistUnlockUntil(null);
       setProjectModalOpen(false);
@@ -124,12 +138,13 @@ function App() {
   };
 
   useEffect(() => {
-    apiFetch<{ rangeStart: string; rangeEnd: string }>('/api/app-settings')
+    apiFetch<{ rangeStart: string; rangeEnd: string; isLockEnabled?: boolean }>('/api/app-settings')
       .then((data) => {
         const parsedStart = parseMonthValue(data.rangeStart);
         const parsedEnd = parseMonthValue(data.rangeEnd);
         if (parsedStart) setRangeStart(parsedStart);
         if (parsedEnd) setRangeEnd(parsedEnd);
+        setIsLockEnabled(Boolean(data.isLockEnabled));
         setIsRangeLoaded(true);
       })
       .catch((error) => {
@@ -197,16 +212,7 @@ function App() {
 
     apiFetch<any[]>(`/api/projects?scenarioId=${activeScenario.id}`)
       .then((data) => {
-        setProjects(
-          data.map(p => ({
-            ...p,
-            start: new Date(p.start),
-            gg: p.gg ?? 4.5,
-            priority: p.priority ?? 10,
-            muted: p.muted ?? false,
-            displayOrder: p.displayOrder ?? 0,
-          })),
-        );
+        setProjects(data.map(normalizeProject));
       })
       .catch(console.error);
 
@@ -317,16 +323,7 @@ function App() {
           fetch(apiUrl(`/api/projects?scenarioId=${activeScenario.id}`))
             .then(res => res.json())
             .then((data: any[]) => {
-              setProjects(
-                data.map(p => ({
-                  ...p,
-                  start: new Date(p.start),
-                  gg: p.gg ?? 4.5,
-                  priority: p.priority ?? 10,
-                  muted: p.muted ?? false,
-                  displayOrder: p.displayOrder ?? 0,
-                })),
-              );
+              setProjects(data.map(normalizeProject));
             })
             .catch(console.error);
         }
@@ -341,10 +338,10 @@ function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id })
-    })
+      })
       .then(res => res.json())
       .then((project: any) => {
-        setProjects(prev => [...prev, { ...project, start: new Date(project.start), displayOrder: project.displayOrder ?? 0 }]);
+        setProjects(prev => [...prev, normalizeProject(project)]);
       })
       .catch(console.error);
   };
@@ -371,6 +368,7 @@ function App() {
         start: updated.start.toISOString(),
         muted: updated.muted,
         priority: updated.priority,
+        color: updated.color,
       })
     }).catch(console.error);
   };
@@ -393,7 +391,8 @@ function App() {
     m2: number,
     gg: number,
     priority: number,
-    start: Date
+    start: Date,
+    color: string | null
   ) => {
     if (!ensureEditAccess()) return;
     if (activeProject) {
@@ -404,10 +403,11 @@ function App() {
         gg,
         priority,
         start,
+        color,
         muted: activeProject.muted,
       });
     } else {
-      handleProjectAdd({ name, m2, gg, priority, start });
+      handleProjectAdd({ name, m2, gg, priority, start, color });
     }
     setProjectModalOpen(false);
   };
@@ -511,7 +511,8 @@ function App() {
           rangeEnd={formatMonthValue(rangeEnd)}
           onRangeStartChange={handleRangeStartChange}
           onRangeEndChange={handleRangeEndChange}
-          isEditUnlocked={isEditUnlocked}
+          isLockEnabled={isLockEnabled}
+          isEditUnlocked={isEditingEnabled}
           unlockRemainingMinutes={unlockRemainingMinutes}
           onEditLockToggle={handleEditLockToggle}
         />
@@ -530,7 +531,7 @@ function App() {
               onProjectReorder={handleProjectReorder}
               rangeStart={rangeStart}
               rangeEnd={rangeEnd}
-              isEditingEnabled={isEditUnlocked}
+              isEditingEnabled={isEditingEnabled}
             />
           ) : (
             <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>
@@ -543,7 +544,7 @@ function App() {
             initialDate={initialDate}
             onCancel={() => setProjectModalOpen(false)}
             onSubmit={handleModalSubmit}
-            canEdit={isEditUnlocked}
+            canEdit={isEditingEnabled}
           />
         </main>
       </div>
@@ -552,8 +553,5 @@ function App() {
 }                                                                                                                                                                                                                   
                                                                                                                                                                                                                     
 export default App
-
-
-
 
 

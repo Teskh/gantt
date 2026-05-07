@@ -87,6 +87,8 @@
   --grid-line: rgba(0, 0, 0, 0.05);
   --gantt-line: #cbd5e1;
   --gantt-line-subtle: rgba(15, 23, 42, 0.04);
+  --gantt-no-production-gap: rgba(245, 158, 11, 0.09);
+  --gantt-no-production-gap-line: rgba(245, 158, 11, 0.18);
 }
 
 .dark {
@@ -133,6 +135,8 @@
   --grid-line: rgba(255, 255, 255, 0.05);
   --gantt-line: #334155;
   --gantt-line-subtle: rgba(148, 163, 184, 0.08);
+  --gantt-no-production-gap: rgba(245, 158, 11, 0.13);
+  --gantt-no-production-gap-line: rgba(245, 158, 11, 0.24);
 }
 
 @layer base {
