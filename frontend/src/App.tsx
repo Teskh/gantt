@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 import './App.css'
 import { ProductionGantt } from './components/ProductionGantt'
@@ -32,7 +32,30 @@ export interface ProductionRatePoint {
   isActive: boolean;
 }
 
-const normalizeProject = (project: any): Project => ({
+
+
+interface SerializedProject extends Omit<Project, 'start'> {
+  start: string;
+}
+
+interface SerializedProductionRatePoint extends Omit<ProductionRatePoint, 'month'> {
+  month: string;
+}
+
+interface ScenarioSnapshot {
+  scenario: Scenario;
+  projects: SerializedProject[];
+  productionRatePoints: SerializedProductionRatePoint[];
+}
+
+interface AppSettings {
+  rangeStart: string;
+  rangeEnd: string;
+  isLockEnabled?: boolean;
+  revision: number;
+}
+
+const normalizeProject = (project: SerializedProject): Project => ({
   ...project,
   start: new Date(project.start),
   gg: project.gg ?? 4.5,
@@ -42,6 +65,12 @@ const normalizeProject = (project: any): Project => ({
   color: typeof project.color === 'string' ? project.color : null,
 });
 
+const parseMonthValue = (value: string): Date | null => {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month) return null;
+  return new Date(year, month - 1, 1);
+};
+
 function App() {
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
@@ -49,12 +78,14 @@ function App() {
   const [productionRatePoints, setProductionRatePoints] = useState<ProductionRatePoint[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [isChartInteracting, setIsChartInteracting] = useState(false);
+  const [pendingSnapshot, setPendingSnapshot] = useState<ScenarioSnapshot | null>(null);
   const [initialDate, setInitialDate] = useState<Date>(new Date());
   const defaultRangeStart = normalizeMonth(new Date());
   const defaultRangeEnd = addMonths(defaultRangeStart, 11);
   const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
   const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
-  const [isRangeLoaded, setIsRangeLoaded] = useState(false);
+  const [settingsRevision, setSettingsRevision] = useState<number | null>(null);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
@@ -111,47 +142,64 @@ function App() {
   const formatMonthValue = (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-  const parseMonthValue = (value: string): Date | null => {
-    const [year, month] = value.split('-').map(Number);
-    if (!year || !month) return null;
-    return new Date(year, month - 1, 1);
+  const applySettings = useCallback((data: AppSettings) => {
+    const parsedStart = parseMonthValue(data.rangeStart);
+    const parsedEnd = parseMonthValue(data.rangeEnd);
+    if (parsedStart) setRangeStart(parsedStart);
+    if (parsedEnd) setRangeEnd(parsedEnd);
+    setIsLockEnabled(Boolean(data.isLockEnabled));
+    setSettingsRevision(data.revision);
+  }, []);
+
+  const saveRangeSettings = (nextStart: Date, nextEnd: Date) => {
+    if (settingsRevision === null) return;
+    fetch(apiUrl("/api/app-settings"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rangeStart: serializeMonth(nextStart),
+        rangeEnd: serializeMonth(nextEnd),
+        expectedRevision: settingsRevision,
+      }),
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (response.status === 409) {
+          applySettings(data.settings);
+          alert("El rango fue modificado por otro usuario. Se cargaron los valores mas recientes.");
+          return;
+        }
+        if (!response.ok) throw new Error(data.error ?? "Unable to save settings");
+        applySettings(data);
+      })
+      .catch(console.error);
   };
 
   const handleRangeStartChange = (value: string) => {
     if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
+    const nextEnd = parsed > rangeEnd ? parsed : rangeEnd;
     setRangeStart(parsed);
-    if (parsed > rangeEnd) {
-      setRangeEnd(parsed);
-    }
+    setRangeEnd(nextEnd);
+    saveRangeSettings(parsed, nextEnd);
   };
 
   const handleRangeEndChange = (value: string) => {
     if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
-    if (parsed < rangeStart) {
-      setRangeStart(parsed);
-    }
+    const nextStart = parsed < rangeStart ? parsed : rangeStart;
+    setRangeStart(nextStart);
     setRangeEnd(parsed);
+    saveRangeSettings(nextStart, parsed);
   };
 
   useEffect(() => {
-    apiFetch<{ rangeStart: string; rangeEnd: string; isLockEnabled?: boolean }>('/api/app-settings')
-      .then((data) => {
-        const parsedStart = parseMonthValue(data.rangeStart);
-        const parsedEnd = parseMonthValue(data.rangeEnd);
-        if (parsedStart) setRangeStart(parsedStart);
-        if (parsedEnd) setRangeEnd(parsedEnd);
-        setIsLockEnabled(Boolean(data.isLockEnabled));
-        setIsRangeLoaded(true);
-      })
-      .catch((error) => {
-        console.error(error);
-        setIsRangeLoaded(true);
-      });
-  }, []);
+    apiFetch<AppSettings>("/api/app-settings")
+      .then(applySettings)
+      .catch(console.error);
+  }, [applySettings]);
 
   useEffect(() => {
     const storedUnlockUntil = window.localStorage.getItem(EDIT_UNLOCK_STORAGE_KEY);
@@ -180,57 +228,117 @@ function App() {
     setScenarioNameDraft(activeScenario?.name ?? '');
   }, [unlockUntilMs, nowMs, activeScenario]);
 
-  useEffect(() => {
-    if (!isRangeLoaded) return;
-    fetch(apiUrl('/api/app-settings'), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rangeStart: serializeMonth(rangeStart),
-        rangeEnd: serializeMonth(rangeEnd),
-      }),
-    }).catch(console.error);
-  }, [rangeStart, rangeEnd, isRangeLoaded]);
+  const normalizeProductionRatePoints = (points: SerializedProductionRatePoint[]): ProductionRatePoint[] =>
+    points
+      .map((point) => ({ ...point, month: new Date(point.month), isActive: Boolean(point.isActive) }))
+      .sort((a, b) => a.month.getTime() - b.month.getTime());
+
+  const applySnapshot = useCallback((snapshot: ScenarioSnapshot) => {
+    setActiveScenario(snapshot.scenario);
+    setScenarios((current) =>
+      current.map((scenario) => scenario.id === snapshot.scenario.id ? snapshot.scenario : scenario)
+    );
+    setProjects(snapshot.projects.map(normalizeProject));
+    setProductionRatePoints(normalizeProductionRatePoints(snapshot.productionRatePoints));
+    setPendingSnapshot(null);
+  }, []);
 
   useEffect(() => {
-    apiFetch<Scenario[]>('/api/scenarios')
+    apiFetch<Scenario[]>("/api/scenarios")
       .then((data) => {
         setScenarios(data);
-        if (data.length > 0) {
-          setActiveScenario(data[0]);
-        }
+        setActiveScenario((current) =>
+          data.find((scenario) => scenario.id === current?.id) ?? data[0] ?? null
+        );
       })
       .catch(console.error);
   }, []);
 
+  const activeScenarioId = activeScenario?.id;
+
   useEffect(() => {
-    if (!activeScenario) {
+    if (!activeScenarioId) {
       setProjects([]);
       setProductionRatePoints([]);
       return;
     }
-
-    apiFetch<any[]>(`/api/projects?scenarioId=${activeScenario.id}`)
-      .then((data) => {
-        setProjects(data.map(normalizeProject));
-      })
+    setPendingSnapshot(null);
+    let cancelled = false;
+    apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenarioId + "/snapshot")
+      .then((snapshot) => { if (!cancelled) applySnapshot(snapshot); })
       .catch(console.error);
+    return () => { cancelled = true; };
+  }, [activeScenarioId, applySnapshot]);
 
-    apiFetch<any[]>(`/api/production-rate-points?scenarioId=${activeScenario.id}`)
-      .then((data) => {
-        const points = data
-          .map(p => ({ ...p, month: new Date(p.month), isActive: !!p.isActive }))
-          .sort((a, b) => a.month.getTime() - b.month.getTime());
-        setProductionRatePoints(points);
-      })
-      .catch(console.error);
-  }, [activeScenario]);
+  useEffect(() => {
+    if (!activeScenario) return;
+    let inFlight = false;
+    const poll = async () => {
+      if (document.visibilityState !== "visible" || inFlight) return;
+      inFlight = true;
+      try {
+        const [currentScenarios, settings] = await Promise.all([
+          apiFetch<Scenario[]>("/api/scenarios"),
+          apiFetch<AppSettings>("/api/app-settings"),
+        ]);
+        setScenarios(currentScenarios);
+        applySettings(settings);
+        if (!currentScenarios.some((scenario) => scenario.id === activeScenario.id)) {
+          setActiveScenario(currentScenarios[0] ?? null);
+          return;
+        }
+        const snapshot = await apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenario.id + "/snapshot");
+        if (snapshot.scenario.revision !== activeScenario.revision) {
+          if (projectModalOpen || isEditingScenarioName || isChartInteracting) {
+            setPendingSnapshot(snapshot);
+          } else {
+            applySnapshot(snapshot);
+          }
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = window.setInterval(poll, 5_000);
+    const handleVisibilityChange = () => { if (document.visibilityState === "visible") void poll(); };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeScenario, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings]);
 
   useEffect(() => {
     if (activeScenario) {
-      setScenarioNameDraft(activeScenario.name)
+      setScenarioNameDraft(activeScenario.name);
     }
   }, [activeScenario]);
+
+  useEffect(() => {
+    if (!projectModalOpen && !isEditingScenarioName && !isChartInteracting && pendingSnapshot) {
+      applySnapshot(pendingSnapshot);
+    }
+  }, [projectModalOpen, isEditingScenarioName, isChartInteracting, pendingSnapshot, applySnapshot]);
+
+  const updateActiveRevision = (revision: number) => {
+    setActiveScenario((current) => current ? { ...current, revision } : current);
+    setScenarios((current) =>
+      current.map((scenario) => activeScenario && scenario.id === activeScenario.id ? { ...scenario, revision } : scenario)
+    );
+  };
+
+  const handleScenarioWriteResponse = async (response: Response) => {
+    const data = await response.json();
+    if (response.status === 409) {
+      applySnapshot(data.snapshot);
+      alert("Otro usuario modifico este escenario. Se cargaron los datos mas recientes y no se guardo tu cambio.");
+      return null;
+    }
+    if (!response.ok) throw new Error(data.error ?? "Unable to save scenario");
+    return data;
+  };
 
   const handleProjectUpdate = (projectId: number, newStart: Date) => {
     if (!ensureEditAccess(true)) return;
@@ -242,8 +350,15 @@ function App() {
     fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start: newStart.toISOString() })
-    }).catch(console.error);
+      body: JSON.stringify({ start: newStart.toISOString(), expectedRevision: activeScenario?.revision })
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
+        setProjects((current) => current.map((project) => project.id === result.project.id ? normalizeProject(result.project) : project));
+      })
+      .catch(console.error);
   };
 
   const handleScenarioNameSave = () => {
@@ -269,10 +384,11 @@ function App() {
       fetch(apiUrl(`/api/scenarios/${activeScenario.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed })
+        body: JSON.stringify({ name: trimmed, expectedRevision: activeScenario.revision })
       })
-        .then(res => res.json())
-        .then((updated: Scenario) => {
+        .then(handleScenarioWriteResponse)
+        .then((updated: Scenario | null) => {
+          if (!updated) return;
           setScenarios(prev => prev.map(s => (s.id === updated.id ? updated : s)))
           setActiveScenario(updated)
         })
@@ -308,25 +424,29 @@ function App() {
     fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ muted: newMutedState }),
-    }).catch(console.error);
+      body: JSON.stringify({ muted: newMutedState, expectedRevision: activeScenario?.revision }),
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
+        setProjects((current) => current.map((item) => item.id === result.project.id ? normalizeProject(result.project) : item));
+      })
+      .catch(console.error);
   };
 
   const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
-    if (!ensureEditAccess(true)) return;
-    fetch(apiUrl(`/api/projects/${projectId}/${action}`), {
-      method: 'POST',
+    if (!ensureEditAccess(true) || !activeScenario) return;
+    fetch(apiUrl("/api/projects/" + projectId + "/" + action), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: activeScenario.revision }),
     })
-      .then(() => {
-        // Refetch projects to get updated order
-        if (activeScenario) {
-          fetch(apiUrl(`/api/projects?scenarioId=${activeScenario.id}`))
-            .then(res => res.json())
-            .then((data: any[]) => {
-              setProjects(data.map(normalizeProject));
-            })
-            .catch(console.error);
-        }
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
+        return apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenario.id + "/snapshot").then(applySnapshot);
       })
       .catch(console.error);
   };
@@ -337,19 +457,28 @@ function App() {
     fetch(apiUrl('/api/projects'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id })
+      body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id, expectedRevision: activeScenario.revision })
       })
-      .then(res => res.json())
-      .then((project: any) => {
-        setProjects(prev => [...prev, normalizeProject(project)]);
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
+        setProjects(prev => [...prev, normalizeProject(result.project)]);
       })
       .catch(console.error);
   };
 
   const handleProjectDelete = (id: number) => {
     if (!ensureEditAccess()) return;
-    fetch(apiUrl(`/api/projects/${id}`), { method: 'DELETE' })
-      .then(() => {
+    fetch(apiUrl("/api/projects/" + id), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: activeScenario?.revision }),
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
         setProjects(prev => prev.filter(p => p.id !== id));
       })
       .catch(console.error);
@@ -369,8 +498,16 @@ function App() {
         muted: updated.muted,
         priority: updated.priority,
         color: updated.color,
+        expectedRevision: activeScenario?.revision,
       })
-    }).catch(console.error);
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(result.revision);
+        setProjects((current) => current.map((project) => project.id === result.project.id ? normalizeProject(result.project) : project));
+      })
+      .catch(console.error);
   };
 
   const handleCreateProjectAtDate = (startDate: Date) => {
@@ -424,14 +561,18 @@ function App() {
     fetch(apiUrl(`/api/production-rate-points?scenarioId=${activeScenario.id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        points.map(p => ({
+      body: JSON.stringify({
+        expectedRevision: activeScenario.revision,
+        points: points.map(p => ({
           month: serializeMonth(p.month),
           rate: p.rate,
           isActive: p.isActive,
-        }))
-      )
-    }).catch(console.error);
+        })),
+      })
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => { if (result) updateActiveRevision(result.revision); })
+      .catch(console.error);
   };
 
   const handleScenarioChange = (scenarioId: number) => {
@@ -478,8 +619,14 @@ function App() {
     }
     if (!window.confirm('¿Está seguro de que desea eliminar este escenario?')) return;
 
-    fetch(apiUrl(`/api/scenarios/${scenarioId}`), { method: 'DELETE' })
-      .then(() => {
+    fetch(apiUrl("/api/scenarios/" + scenarioId), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: activeScenario?.revision }),
+    })
+      .then(handleScenarioWriteResponse)
+      .then((result) => {
+        if (!result) return;
         setScenarios(prev => {
           const newScenarios = prev.filter(s => s.id !== scenarioId);
           if (activeScenario?.id === scenarioId) {
@@ -515,6 +662,8 @@ function App() {
           isEditUnlocked={isEditingEnabled}
           unlockRemainingMinutes={unlockRemainingMinutes}
           onEditLockToggle={handleEditLockToggle}
+          hasRemoteChanges={pendingSnapshot !== null}
+          onApplyRemoteChanges={() => { if (pendingSnapshot) applySnapshot(pendingSnapshot); }}
         />
         <main className="flex flex-col flex-grow min-h-0">
           {activeScenario ? (
@@ -532,6 +681,7 @@ function App() {
               rangeStart={rangeStart}
               rangeEnd={rangeEnd}
               isEditingEnabled={isEditingEnabled}
+              onInteractionChange={setIsChartInteracting}
             />
           ) : (
             <div className="p-4 text-center border rounded-lg bg-card shadow text-foreground" style={{ minHeight: '200px' }}>

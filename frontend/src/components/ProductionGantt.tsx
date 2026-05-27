@@ -37,6 +37,7 @@ interface ProductionGanttProps {
   rangeStart: Date;
   rangeEnd: Date;
   isEditingEnabled: boolean;
+  onInteractionChange?: (active: boolean) => void;
 }
 
 const addDays = (date: Date, days: number): Date => {
@@ -84,6 +85,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   rangeStart,
   rangeEnd,
   isEditingEnabled,
+  onInteractionChange,
 }) => {
   const [contextMenuProject, setContextMenuProject] = useState<Project | null>(null);
   const [contextMenuDate, setContextMenuDate] = useState<Date | null>(null);
@@ -487,6 +489,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     e.dataTransfer.setData("application/json", JSON.stringify({ projectId, dragOffset: offset }));
     e.dataTransfer.effectAllowed = 'move';
     setDragInfo({ projectId, dragOffset: offset });
+    onInteractionChange?.(true);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -532,13 +535,15 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
 
     onProjectUpdate(projectId, newStartDate);
     setDragFeedback(null);
+    onInteractionChange?.(false);
   };
 
   useEffect(() => {
     if (isEditingEnabled) return;
     setDragInfo(null);
     setDragFeedback(null);
-  }, [isEditingEnabled]);
+    onInteractionChange?.(false);
+  }, [isEditingEnabled, onInteractionChange]);
 
   return (
     <div className="flex min-h-full flex-col">
@@ -554,6 +559,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         onRateViewChange={setRateView}
         monthPositions={monthPositions}
         isEditingEnabled={isEditingEnabled}
+        onInteractionChange={onInteractionChange}
       />
 
       <HoverCard>
@@ -751,7 +757,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  draggable={isEditingEnabled}
                                  onDoubleClick={() => { if (!isEditingEnabled) return; onProjectMuteToggle(project.id); }}
                                  onDragStart={(e) => handleDragStart(e, project.id)}
-                                 onDragEnd={() => { setDragInfo(null); setDragFeedback(null); }}
+                                 onDragEnd={() => { setDragInfo(null); setDragFeedback(null); onInteractionChange?.(false); }}
                                  className={cn(
                                    "h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
                                     isEditingEnabled ? "cursor-move" : "cursor-default",

@@ -15,6 +15,7 @@ interface ProductionRateMonthlyProps {
   onRateViewChange: (view: "daily" | "weekly" | "monthly" | "yearly") => void;
   monthPositions: Array<{ key: string; date: Date; width: number; x: number }>;
   isEditingEnabled: boolean;
+  onInteractionChange?: (active: boolean) => void;
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -36,6 +37,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   onRateViewChange,
   monthPositions,
   isEditingEnabled,
+  onInteractionChange,
 }) => {
   const series = useMemo(
     () => buildMonthlySeries(points, minMonth, maxMonth),
@@ -157,12 +159,13 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
 
   const finishDrag = useCallback(() => {
     setDraggingKey(null);
+    onInteractionChange?.(false);
     setHoveredKey(null);
     if (lastUpdatedRef.current) {
       onPointsSave?.(lastUpdatedRef.current);
     }
     lastUpdatedRef.current = null;
-  }, [onPointsSave]);
+  }, [onPointsSave, onInteractionChange]);
 
   useEffect(() => {
     if (!draggingKey) return;
@@ -190,8 +193,9 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     if (isEditingEnabled) return;
     setDraggingKey(null);
     setHoveredKey(null);
+    onInteractionChange?.(false);
     lastUpdatedRef.current = null;
-  }, [isEditingEnabled]);
+  }, [isEditingEnabled, onInteractionChange]);
 
   const unitLabel =
     rateView === "daily"
@@ -344,6 +348,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
                   if (!isEditingEnabled) return;
                   event.preventDefault();
                   setDraggingKey(point.key);
+                  onInteractionChange?.(true);
                   setHoveredKey(point.key);
                   applyRateChange(point.key, event.clientY);
                 }}

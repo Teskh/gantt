@@ -13,6 +13,7 @@ import { ModeToggle } from './ui/mode-toggle';
 export interface Scenario {
   id: number;
   name: string;
+  revision: number;
 }
 
 interface ScenarioManagerProps {
@@ -36,6 +37,8 @@ interface ScenarioManagerProps {
   isEditUnlocked: boolean;
   unlockRemainingMinutes: number;
   onEditLockToggle: () => void;
+  hasRemoteChanges: boolean;
+  onApplyRemoteChanges: () => void;
 }
 
 export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
@@ -59,6 +62,8 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
   isEditUnlocked,
   unlockRemainingMinutes,
   onEditLockToggle,
+  hasRemoteChanges,
+  onApplyRemoteChanges,
 }) => {
   const handleCopy = () => {
     if (activeScenario) {
@@ -151,6 +156,16 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             <PlusSquare className="mx-auto h-3.5 w-3.5" />
           </button>
         </div>
+
+        {hasRemoteChanges && (
+          <button
+            type="button"
+            onClick={onApplyRemoteChanges}
+            className="h-8 border border-amber-500/40 bg-amber-500/10 px-3 text-[10px] font-bold uppercase text-amber-700 hover:bg-amber-500/20"
+          >
+            Hay cambios nuevos - actualizar
+          </button>
+        )}
 
         <div className="flex h-8 items-center gap-2 rounded border border-border bg-muted/70 px-2">
           <span className="text-[10px] font-bold uppercase text-muted-foreground">
