@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "main": "src/index.js",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "node src/index.js",
     "start": "node src/index.js",
+    "test": "node --test",
     "migrate:old-db": "node scripts/migrate-old-db.js"
   },
   "dependencies": {

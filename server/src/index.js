@@ -6,17 +6,33 @@ const Database = require("better-sqlite3");
 
 const app = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 3005;
+const host = process.env.HOST || "0.0.0.0";
 const isLockEnabled = process.argv.includes("--locked");
+const configuredCorsOrigins = new Set(
+  (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
-app.use(cors());
+app.use(cors((req, callback) => {
+  const origin = req.get("Origin");
+  const requestOrigin = `${req.protocol}://${req.get("host")}`;
+  const isAllowed = !origin || origin === requestOrigin || configuredCorsOrigins.has(origin);
+  callback(null, { origin: isAllowed ? origin || false : false });
+}));
 app.use(express.json());
 
 const dataDir = path.join(__dirname, "..", "data");
-const dbPath = path.join(dataDir, "app.db");
-fs.mkdirSync(dataDir, { recursive: true });
+const dbPath = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(dataDir, "app.db");
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
+db.pragma("journal_mode = WAL");
+db.pragma("busy_timeout = 5000");
 
 const parseMonthString = (value) => {
   if (typeof value !== "string") return null;
@@ -50,6 +66,18 @@ const PROJECT_COLORS = new Set(["#0ea5e9", "#10b981", "#f59e0b", "#ef4444"]);
 
 const normalizeProjectColor = (value) =>
   typeof value === "string" && PROJECT_COLORS.has(value) ? value : null;
+
+const isPositiveNumber = (value) =>
+  typeof value === "number" && Number.isFinite(value) && value > 0;
+
+const isNonNegativeNumber = (value) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isValidDateValue = (value) =>
+  typeof value === "string" && value.trim() !== "" && Number.isFinite(new Date(value).getTime());
+
+const normalizeName = (value) =>
+  typeof value === "string" ? value.trim() : "";
 
 const initDb = () => {
   db.exec(`
@@ -290,7 +318,7 @@ app.get("/api/scenarios", (_req, res) => {
 });
 
 app.post("/api/scenarios", (req, res) => {
-  const { name } = req.body;
+  const name = normalizeName(req.body.name);
   if (!name) return res.status(400).json({ error: "name is required" });
 
   const result = db
@@ -327,7 +355,7 @@ app.post("/api/scenarios", (req, res) => {
 
 app.put("/api/scenarios/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { name } = req.body;
+  const name = normalizeName(req.body.name);
   if (!name) return res.status(400).json({ error: "name is required" });
   const expectedRevision = requireExpectedRevision(req, res);
   if (expectedRevision === null) return;
@@ -474,8 +502,20 @@ app.get("/api/projects", (req, res) => {
 
 app.post("/api/projects", (req, res) => {
   const { name, m2, start, gg, scenarioId, priority, color } = req.body;
-  if (!name || typeof m2 !== "number" || !start || !scenarioId) {
-    return res.status(400).json({ error: "name, m2, start and scenarioId are required" });
+  const normalizedName = normalizeName(name);
+  const normalizedGg = gg ?? 4.5;
+  const normalizedPriority = priority ?? 10;
+  if (
+    !normalizedName ||
+    !isPositiveNumber(m2) ||
+    !isPositiveNumber(normalizedGg) ||
+    !isPositiveNumber(normalizedPriority) ||
+    !isValidDateValue(start) ||
+    !Number.isInteger(scenarioId) ||
+    scenarioId <= 0 ||
+    (color !== undefined && color !== null && !PROJECT_COLORS.has(color))
+  ) {
+    return res.status(400).json({ error: "Invalid project values" });
   }
   const expectedRevision = requireExpectedRevision(req, res);
   if (expectedRevision === null) return;
@@ -486,7 +526,7 @@ app.post("/api/projects", (req, res) => {
       .get(scenarioId).maxOrder;
     const inserted = db
       .prepare("INSERT INTO projects (name, m2, gg, priority, start, muted, display_order, color, scenario_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(name, m2, gg ?? 4.5, typeof priority === "number" ? priority : 10, start, 0, (maxOrder ?? -1) + 1, normalizeProjectColor(color), scenarioId);
+      .run(normalizedName, m2, normalizedGg, normalizedPriority, start, 0, (maxOrder ?? -1) + 1, normalizeProjectColor(color), scenarioId);
     return mapProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(inserted.lastInsertRowid));
   });
   if (!result) return sendScenarioConflict(res, scenarioId);
@@ -500,8 +540,20 @@ app.put("/api/projects/:id", (req, res) => {
   const expectedRevision = requireExpectedRevision(req, res);
   if (expectedRevision === null) return;
   const { name, m2, start, gg, displayOrder, muted, priority, color } = req.body;
+  if (
+    (name !== undefined && !normalizeName(name)) ||
+    (m2 !== undefined && !isPositiveNumber(m2)) ||
+    (gg !== undefined && !isPositiveNumber(gg)) ||
+    (priority !== undefined && !isPositiveNumber(priority)) ||
+    (start !== undefined && !isValidDateValue(start)) ||
+    (displayOrder !== undefined && !Number.isInteger(displayOrder)) ||
+    (muted !== undefined && typeof muted !== "boolean") ||
+    (color !== undefined && color !== null && !PROJECT_COLORS.has(color))
+  ) {
+    return res.status(400).json({ error: "Invalid project values" });
+  }
   const data = {};
-  if (name !== undefined) data.name = name;
+  if (name !== undefined) data.name = normalizeName(name);
   if (m2 !== undefined) data.m2 = m2;
   if (gg !== undefined) data.gg = gg;
   if (start !== undefined) data.start = start;
@@ -601,14 +653,27 @@ app.put("/api/production-rate-points", (req, res) => {
   if (expectedRevision === null) return;
   const points = req.body.points;
   if (!Array.isArray(points)) return res.status(400).json({ error: "points array required" });
+  if (points.some((point) =>
+    !point ||
+    typeof point !== "object" ||
+    typeof point.rate !== "number" ||
+    typeof point.isActive !== "boolean"
+  )) {
+    return res.status(400).json({ error: "Invalid production rate points" });
+  }
 
   const normalizedPoints = points
     .map((point) => ({
       month: normalizeMonth(point.month ?? point.date),
-      rate: Number(point.rate),
-      isActive: Boolean(point.isActive),
-    }))
-    .filter((point) => point.month && !Number.isNaN(point.rate));
+      rate: point.rate,
+      isActive: point.isActive,
+    }));
+  if (
+    normalizedPoints.some((point) => !point.month || !isNonNegativeNumber(point.rate)) ||
+    new Set(normalizedPoints.map((point) => point.month)).size !== normalizedPoints.length
+  ) {
+    return res.status(400).json({ error: "Invalid or duplicate production rate points" });
+  }
 
   try {
     const result = mutateScenario(scenarioId, expectedRevision, () => {
@@ -635,6 +700,10 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`API server listening at http://localhost:${port}`);
-});
+if (require.main === module) {
+  app.listen(port, host, () => {
+    console.log(`API server listening at http://${host}:${port}`);
+  });
+}
+
+module.exports = { app, db };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 import './App.css'
 import { ProductionGantt } from './components/ProductionGantt'
@@ -7,7 +7,8 @@ import { ScenarioManager, type Scenario } from './components/ScenarioManager'
 import { ThemeProvider } from './components/theme-provider'
 import { apiFetch, apiUrl } from './lib/api'
 import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
-// Change this value to rotate the hardcoded edit password.
+import { canApplyScenarioSnapshot, isCurrentOrNewerRevision } from './lib/sync'
+// UI-only accidental-edit guard. The backend does not authenticate this password.
 const EDIT_PASSWORD = 'gantt';
 const EDIT_UNLOCK_DURATION_HOURS = 4;
 const EDIT_UNLOCK_DURATION_MS = EDIT_UNLOCK_DURATION_HOURS * 60 * 60 * 1000;
@@ -85,7 +86,9 @@ function App() {
   const defaultRangeEnd = addMonths(defaultRangeStart, 11);
   const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
   const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
-  const [settingsRevision, setSettingsRevision] = useState<number | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const activeScenarioRef = useRef<Scenario | null>(null);
+  const settingsRevisionRef = useRef<number | null>(null);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
@@ -142,24 +145,36 @@ function App() {
   const formatMonthValue = (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
+  activeScenarioRef.current = activeScenario;
+
+  const reportSyncError = useCallback((error: unknown, message: string) => {
+    console.error(error);
+    setSyncError(message);
+  }, []);
+
   const applySettings = useCallback((data: AppSettings) => {
+    const currentRevision = settingsRevisionRef.current;
+    if (!isCurrentOrNewerRevision(currentRevision, data.revision)) return false;
+
     const parsedStart = parseMonthValue(data.rangeStart);
     const parsedEnd = parseMonthValue(data.rangeEnd);
     if (parsedStart) setRangeStart(parsedStart);
     if (parsedEnd) setRangeEnd(parsedEnd);
     setIsLockEnabled(Boolean(data.isLockEnabled));
-    setSettingsRevision(data.revision);
+    settingsRevisionRef.current = data.revision;
+    return true;
   }, []);
 
   const saveRangeSettings = (nextStart: Date, nextEnd: Date) => {
-    if (settingsRevision === null) return;
+    const expectedRevision = settingsRevisionRef.current;
+    if (expectedRevision === null) return;
     fetch(apiUrl("/api/app-settings"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         rangeStart: serializeMonth(nextStart),
         rangeEnd: serializeMonth(nextEnd),
-        expectedRevision: settingsRevision,
+        expectedRevision,
       }),
     })
       .then(async (response) => {
@@ -171,8 +186,14 @@ function App() {
         }
         if (!response.ok) throw new Error(data.error ?? "Unable to save settings");
         applySettings(data);
+        setSyncError(null);
       })
-      .catch(console.error);
+      .catch((error) => {
+        reportSyncError(error, "No se pudo guardar el rango. Se restauraran los valores del servidor.");
+        apiFetch<AppSettings>("/api/app-settings")
+          .then(applySettings)
+          .catch(console.error);
+      });
   };
 
   const handleRangeStartChange = (value: string) => {
@@ -198,8 +219,8 @@ function App() {
   useEffect(() => {
     apiFetch<AppSettings>("/api/app-settings")
       .then(applySettings)
-      .catch(console.error);
-  }, [applySettings]);
+      .catch((error) => reportSyncError(error, "No se pudo cargar la configuracion del servidor."));
+  }, [applySettings, reportSyncError]);
 
   useEffect(() => {
     const storedUnlockUntil = window.localStorage.getItem(EDIT_UNLOCK_STORAGE_KEY);
@@ -234,25 +255,41 @@ function App() {
       .sort((a, b) => a.month.getTime() - b.month.getTime());
 
   const applySnapshot = useCallback((snapshot: ScenarioSnapshot) => {
-    setActiveScenario(snapshot.scenario);
+    const currentScenario = activeScenarioRef.current;
+    if (!canApplyScenarioSnapshot(currentScenario, snapshot.scenario)) {
+      return false;
+    }
+
+    activeScenarioRef.current = snapshot.scenario;
+    setActiveScenario((current) =>
+      current?.id === snapshot.scenario.id && snapshot.scenario.revision >= current.revision
+        ? snapshot.scenario
+        : current
+    );
     setScenarios((current) =>
-      current.map((scenario) => scenario.id === snapshot.scenario.id ? snapshot.scenario : scenario)
+      current.map((scenario) =>
+        scenario.id === snapshot.scenario.id && snapshot.scenario.revision >= scenario.revision
+          ? snapshot.scenario
+          : scenario
+      )
     );
     setProjects(snapshot.projects.map(normalizeProject));
     setProductionRatePoints(normalizeProductionRatePoints(snapshot.productionRatePoints));
     setPendingSnapshot(null);
+    return true;
   }, []);
 
   useEffect(() => {
     apiFetch<Scenario[]>("/api/scenarios")
       .then((data) => {
         setScenarios(data);
-        setActiveScenario((current) =>
-          data.find((scenario) => scenario.id === current?.id) ?? data[0] ?? null
-        );
+        const nextScenario =
+          data.find((scenario) => scenario.id === activeScenarioRef.current?.id) ?? data[0] ?? null;
+        activeScenarioRef.current = nextScenario;
+        setActiveScenario(nextScenario);
       })
-      .catch(console.error);
-  }, []);
+      .catch((error) => reportSyncError(error, "No se pudieron cargar los escenarios."));
+  }, [reportSyncError]);
 
   const activeScenarioId = activeScenario?.id;
 
@@ -263,40 +300,68 @@ function App() {
       return;
     }
     setPendingSnapshot(null);
-    let cancelled = false;
-    apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenarioId + "/snapshot")
-      .then((snapshot) => { if (!cancelled) applySnapshot(snapshot); })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, [activeScenarioId, applySnapshot]);
+    const controller = new AbortController();
+    apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenarioId + "/snapshot", {
+      signal: controller.signal,
+    })
+      .then((snapshot) => applySnapshot(snapshot))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        reportSyncError(error, "No se pudo cargar el escenario seleccionado.");
+      });
+    return () => controller.abort();
+  }, [activeScenarioId, applySnapshot, reportSyncError]);
 
   useEffect(() => {
-    if (!activeScenario) return;
+    if (!activeScenarioId) return;
     let inFlight = false;
+    let cancelled = false;
+    const controller = new AbortController();
     const poll = async () => {
       if (document.visibilityState !== "visible" || inFlight) return;
       inFlight = true;
       try {
         const [currentScenarios, settings] = await Promise.all([
-          apiFetch<Scenario[]>("/api/scenarios"),
-          apiFetch<AppSettings>("/api/app-settings"),
+          apiFetch<Scenario[]>("/api/scenarios", { signal: controller.signal }),
+          apiFetch<AppSettings>("/api/app-settings", { signal: controller.signal }),
         ]);
-        setScenarios(currentScenarios);
+        if (cancelled || activeScenarioRef.current?.id !== activeScenarioId) return;
+        setScenarios((current) =>
+          currentScenarios.map((incoming) => {
+            const existing = current.find((scenario) => scenario.id === incoming.id);
+            return existing && existing.revision > incoming.revision ? existing : incoming;
+          })
+        );
         applySettings(settings);
-        if (!currentScenarios.some((scenario) => scenario.id === activeScenario.id)) {
-          setActiveScenario(currentScenarios[0] ?? null);
+        if (!currentScenarios.some((scenario) => scenario.id === activeScenarioId)) {
+          const nextScenario = currentScenarios[0] ?? null;
+          activeScenarioRef.current = nextScenario;
+          setActiveScenario(nextScenario);
           return;
         }
-        const snapshot = await apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenario.id + "/snapshot");
-        if (snapshot.scenario.revision !== activeScenario.revision) {
-          if (projectModalOpen || isEditingScenarioName || isChartInteracting) {
-            setPendingSnapshot(snapshot);
-          } else {
-            applySnapshot(snapshot);
-          }
+        const snapshot = await apiFetch<ScenarioSnapshot>(
+          "/api/scenarios/" + activeScenarioId + "/snapshot",
+          { signal: controller.signal }
+        );
+        const currentScenario = activeScenarioRef.current;
+        if (cancelled || !canApplyScenarioSnapshot(currentScenario, snapshot.scenario)) {
+          return;
         }
+        if (projectModalOpen || isEditingScenarioName || isChartInteracting) {
+          if (snapshot.scenario.revision > currentScenario.revision) {
+            setPendingSnapshot((current) =>
+              !current || snapshot.scenario.revision >= current.scenario.revision
+                ? snapshot
+                : current
+            );
+          }
+        } else {
+          applySnapshot(snapshot);
+        }
+        setSyncError(null);
       } catch (error) {
-        console.error(error);
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        reportSyncError(error, "No se pudo actualizar la informacion del servidor.");
       } finally {
         inFlight = false;
       }
@@ -305,10 +370,12 @@ function App() {
     const handleVisibilityChange = () => { if (document.visibilityState === "visible") void poll(); };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
+      cancelled = true;
+      controller.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [activeScenario, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings]);
+  }, [activeScenarioId, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings, reportSyncError]);
 
   useEffect(() => {
     if (activeScenario) {
@@ -322,26 +389,62 @@ function App() {
     }
   }, [projectModalOpen, isEditingScenarioName, isChartInteracting, pendingSnapshot, applySnapshot]);
 
-  const updateActiveRevision = (revision: number) => {
-    setActiveScenario((current) => current ? { ...current, revision } : current);
+  const updateActiveRevision = (scenarioId: number, revision: number) => {
+    const currentScenario = activeScenarioRef.current;
+    if (currentScenario?.id === scenarioId && revision >= currentScenario.revision) {
+      activeScenarioRef.current = { ...currentScenario, revision };
+    }
+    setActiveScenario((current) =>
+      current?.id === scenarioId && revision >= current.revision
+        ? { ...current, revision }
+        : current
+    );
     setScenarios((current) =>
-      current.map((scenario) => activeScenario && scenario.id === activeScenario.id ? { ...scenario, revision } : scenario)
+      current.map((scenario) =>
+        scenario.id === scenarioId && revision >= scenario.revision
+          ? { ...scenario, revision }
+          : scenario
+      )
     );
   };
 
-  const handleScenarioWriteResponse = async (response: Response) => {
-    const data = await response.json();
+  const handleScenarioWriteResponse = async (
+    response: Response,
+    scenarioId: number,
+    allowInactive = false
+  ) => {
+    const data = await response.json().catch(() => ({}));
     if (response.status === 409) {
-      applySnapshot(data.snapshot);
-      alert("Otro usuario modifico este escenario. Se cargaron los datos mas recientes y no se guardo tu cambio.");
+      const applied = data.snapshot ? applySnapshot(data.snapshot) : false;
+      if (applied) {
+        alert("Otro usuario modifico este escenario. Se cargaron los datos mas recientes y no se guardo tu cambio.");
+      }
       return null;
     }
     if (!response.ok) throw new Error(data.error ?? "Unable to save scenario");
+    if (!allowInactive) {
+      const currentScenario = activeScenarioRef.current;
+      if (currentScenario?.id !== scenarioId) return null;
+      if (typeof data.revision === "number" && data.revision < currentScenario.revision) {
+        return null;
+      }
+    }
+    setSyncError(null);
     return data;
   };
 
+  const handleScenarioWriteFailure = useCallback((error: unknown, scenarioId: number) => {
+    reportSyncError(error, "No se pudo guardar el cambio. Se restauraran los datos del servidor.");
+    if (activeScenarioRef.current?.id !== scenarioId) return;
+    apiFetch<ScenarioSnapshot>("/api/scenarios/" + scenarioId + "/snapshot")
+      .then(applySnapshot)
+      .catch(console.error);
+  }, [applySnapshot, reportSyncError]);
+
   const handleProjectUpdate = (projectId: number, newStart: Date) => {
     if (!ensureEditAccess(true)) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     setProjects(currentProjects =>
       currentProjects.map(p =>
         p.id === projectId ? { ...p, start: newStart } : p
@@ -350,15 +453,15 @@ function App() {
     fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start: newStart.toISOString(), expectedRevision: activeScenario?.revision })
+      body: JSON.stringify({ start: newStart.toISOString(), expectedRevision: scenario.revision })
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
+        updateActiveRevision(scenario.id, result.revision);
         setProjects((current) => current.map((project) => project.id === result.project.id ? normalizeProject(result.project) : project));
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleScenarioNameSave = () => {
@@ -380,19 +483,21 @@ function App() {
       // If no active scenario, create a new one with the typed name
       handleScenarioCreate(trimmed)
     } else if (trimmed !== activeScenario.name) {
+      const scenario = activeScenario;
       // If active scenario exists and name has changed, update it
-      fetch(apiUrl(`/api/scenarios/${activeScenario.id}`), {
+      fetch(apiUrl(`/api/scenarios/${scenario.id}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed, expectedRevision: activeScenario.revision })
+        body: JSON.stringify({ name: trimmed, expectedRevision: scenario.revision })
       })
-        .then(handleScenarioWriteResponse)
+        .then((response) => handleScenarioWriteResponse(response, scenario.id))
         .then((updated: Scenario | null) => {
           if (!updated) return;
-          setScenarios(prev => prev.map(s => (s.id === updated.id ? updated : s)))
-          setActiveScenario(updated)
+          activeScenarioRef.current = updated;
+          setScenarios(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+          setActiveScenario((current) => current?.id === scenario.id ? updated : current);
         })
-        .catch(console.error)
+        .catch((error) => handleScenarioWriteFailure(error, scenario.id))
     }
     setIsEditingScenarioName(false)
   };
@@ -411,6 +516,8 @@ function App() {
   // ---------------- Project CRUD helpers ----------------
   const handleProjectMuteToggle = (projectId: number) => {
     if (!ensureEditAccess(true)) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
 
@@ -424,68 +531,75 @@ function App() {
     fetch(apiUrl(`/api/projects/${projectId}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ muted: newMutedState, expectedRevision: activeScenario?.revision }),
+      body: JSON.stringify({ muted: newMutedState, expectedRevision: scenario.revision }),
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
+        updateActiveRevision(scenario.id, result.revision);
         setProjects((current) => current.map((item) => item.id === result.project.id ? normalizeProject(result.project) : item));
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
-    if (!ensureEditAccess(true) || !activeScenario) return;
+    if (!ensureEditAccess(true)) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     fetch(apiUrl("/api/projects/" + projectId + "/" + action), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedRevision: activeScenario.revision }),
+      body: JSON.stringify({ expectedRevision: scenario.revision }),
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
-        return apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenario.id + "/snapshot").then(applySnapshot);
+        updateActiveRevision(scenario.id, result.revision);
+        return apiFetch<ScenarioSnapshot>("/api/scenarios/" + scenario.id + "/snapshot").then(applySnapshot);
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
     if (!ensureEditAccess()) return;
-    if (!activeScenario) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     fetch(apiUrl('/api/projects'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: activeScenario.id, expectedRevision: activeScenario.revision })
+      body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: scenario.id, expectedRevision: scenario.revision })
       })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
+        updateActiveRevision(scenario.id, result.revision);
         setProjects(prev => [...prev, normalizeProject(result.project)]);
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleProjectDelete = (id: number) => {
     if (!ensureEditAccess()) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     fetch(apiUrl("/api/projects/" + id), {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: activeScenario?.revision }),
+      body: JSON.stringify({ expectedRevision: scenario.revision }),
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
+        updateActiveRevision(scenario.id, result.revision);
         setProjects(prev => prev.filter(p => p.id !== id));
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleProjectChange = (updated: Project) => {
     if (!ensureEditAccess()) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
     fetch(apiUrl(`/api/projects/${updated.id}`), {
       method: 'PUT',
@@ -498,16 +612,16 @@ function App() {
         muted: updated.muted,
         priority: updated.priority,
         color: updated.color,
-        expectedRevision: activeScenario?.revision,
+        expectedRevision: scenario.revision,
       })
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
         if (!result) return;
-        updateActiveRevision(result.revision);
+        updateActiveRevision(scenario.id, result.revision);
         setProjects((current) => current.map((project) => project.id === result.project.id ? normalizeProject(result.project) : project));
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleCreateProjectAtDate = (startDate: Date) => {
@@ -556,13 +670,14 @@ function App() {
 
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
     if (!ensureEditAccess(true)) return;
-    if (!activeScenario) return;
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
     setProductionRatePoints(points);
-    fetch(apiUrl(`/api/production-rate-points?scenarioId=${activeScenario.id}`), {
+    fetch(apiUrl(`/api/production-rate-points?scenarioId=${scenario.id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        expectedRevision: activeScenario.revision,
+        expectedRevision: scenario.revision,
         points: points.map(p => ({
           month: serializeMonth(p.month),
           rate: p.rate,
@@ -570,14 +685,15 @@ function App() {
         })),
       })
     })
-      .then(handleScenarioWriteResponse)
-      .then((result) => { if (result) updateActiveRevision(result.revision); })
-      .catch(console.error);
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
+      .then((result) => { if (result) updateActiveRevision(scenario.id, result.revision); })
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
   const handleScenarioChange = (scenarioId: number) => {
     const newActiveScenario = scenarios.find(s => s.id === scenarioId);
     if (newActiveScenario) {
+      activeScenarioRef.current = newActiveScenario;
       setActiveScenario(newActiveScenario);
     }
   };
@@ -587,32 +703,38 @@ function App() {
     const name = nameFromInput || window.prompt('Ingrese el nombre del nuevo escenario:', 'Nuevo Escenario');
     if (!name) return;
 
-    fetch(apiUrl('/api/scenarios'), {
+    apiFetch<Scenario>('/api/scenarios', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     })
-      .then(res => res.json())
       .then((newScenario: Scenario) => {
+        activeScenarioRef.current = newScenario;
         setScenarios(prev => [...prev, newScenario]);
         setActiveScenario(newScenario);
+        setSyncError(null);
       })
-      .catch(console.error);
+      .catch((error) => reportSyncError(error, "No se pudo crear el escenario."));
   };
 
   const handleScenarioCopy = (scenarioId: number) => {
     if (!ensureEditAccess()) return;
-    fetch(apiUrl(`/api/scenarios/${scenarioId}/copy`), { method: 'POST' })
-      .then(res => res.json())
+    apiFetch<Scenario>(`/api/scenarios/${scenarioId}/copy`, { method: 'POST' })
       .then((newScenario: Scenario) => {
         setScenarios(prev => [...prev, newScenario]);
-        setActiveScenario(newScenario);
+        if (activeScenarioRef.current?.id === scenarioId) {
+          activeScenarioRef.current = newScenario;
+          setActiveScenario(newScenario);
+        }
+        setSyncError(null);
       })
-      .catch(console.error);
+      .catch((error) => reportSyncError(error, "No se pudo copiar el escenario."));
   };
 
   const handleScenarioDelete = (scenarioId: number) => {
     if (!ensureEditAccess()) return;
+    const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
+    if (!scenario) return;
     if (scenarios.length <= 1) {
       alert('No se puede eliminar el último escenario.');
       return;
@@ -622,20 +744,22 @@ function App() {
     fetch(apiUrl("/api/scenarios/" + scenarioId), {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: activeScenario?.revision }),
+      body: JSON.stringify({ expectedRevision: scenario.revision }),
     })
-      .then(handleScenarioWriteResponse)
+      .then((response) => handleScenarioWriteResponse(response, scenarioId, true))
       .then((result) => {
         if (!result) return;
         setScenarios(prev => {
           const newScenarios = prev.filter(s => s.id !== scenarioId);
-          if (activeScenario?.id === scenarioId) {
-            setActiveScenario(newScenarios[0] ?? null);
+          if (activeScenarioRef.current?.id === scenarioId) {
+            const nextScenario = newScenarios[0] ?? null;
+            activeScenarioRef.current = nextScenario;
+            setActiveScenario(nextScenario);
           }
           return newScenarios;
         });
       })
-      .catch(console.error);
+      .catch((error) => handleScenarioWriteFailure(error, scenarioId));
   };
 
   return (
@@ -665,6 +789,21 @@ function App() {
           hasRemoteChanges={pendingSnapshot !== null}
           onApplyRemoteChanges={() => { if (pendingSnapshot) applySnapshot(pendingSnapshot); }}
         />
+        {syncError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-700 dark:text-red-300"
+          >
+            <span>{syncError}</span>
+            <button
+              type="button"
+              className="ml-4 font-semibold underline underline-offset-2"
+              onClick={() => setSyncError(null)}
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
         <main className="flex flex-col flex-grow min-h-0">
           {activeScenario ? (
             <ProductionGantt
@@ -703,5 +842,3 @@ function App() {
 }                                                                                                                                                                                                                   
                                                                                                                                                                                                                     
 export default App
-
-

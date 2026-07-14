@@ -71,6 +71,29 @@ const getProjectBarStyle = (project: Project): React.CSSProperties => {
   };
 };
 
+type RateView = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+const RATE_MULTIPLIERS: Record<RateView, number> = {
+  daily: 1,
+  weekly: 4.8,
+  monthly: 20.5,
+  yearly: 250,
+};
+
+const MIN_RATE_MAP: Record<RateView, number> = {
+  daily: 80,
+  weekly: 400,
+  monthly: 1650,
+  yearly: 20000,
+};
+
+const MAX_RATE_MAP: Record<RateView, number> = {
+  daily: 140,
+  weekly: 670,
+  monthly: 2900,
+  yearly: 35000,
+};
+
 export const ProductionGantt: React.FC<ProductionGanttProps> = ({ 
   projects, 
   productionRatePoints, 
@@ -96,35 +119,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   const [textMeasurements, setTextMeasurements] = useState<{ [projectId: number]: { width: number; fits: boolean } }>({});
 
   /* ---------- Production-rate view (daily / weekly / monthly / yearly) ---------- */
-  const [rateView, setRateView] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
-
-  const rateMultipliers: Record<typeof rateView, number> = {
-    daily: 1,
-    weekly: 4.8,   // average working days per week
-    monthly: 20.5, // average working days per month
-    yearly: 250    // average working days per year
-  };
-
-  const minRateMap: Record<typeof rateView, number> = {
-    daily: 80,
-    weekly: 400,
-    monthly: 1650,
-    yearly: 20000,
-  };
-
-  const maxRateMap: Record<typeof rateView, number> = {
-    daily: 140,
-    weekly: 670,
-    monthly: 2900,
-    yearly: 35000,
-  };
+  const [rateView, setRateView] = useState<RateView>('daily');
 
   const displayedPoints = useMemo(
     () =>
       productionRatePoints.map((p) => ({
         ...p,
         // scale for selected view
-        rate: p.rate * rateMultipliers[rateView],
+        rate: p.rate * RATE_MULTIPLIERS[rateView],
       })),
     [productionRatePoints, rateView]
   );
@@ -132,7 +134,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   const toDailyPoints = (points: ProductionRatePoint[]) =>
     points.map((p) => ({
       ...p,
-      rate: p.rate / rateMultipliers[rateView],
+      rate: p.rate / RATE_MULTIPLIERS[rateView],
     }));
 
   const activeRatePoints = useMemo(
@@ -315,20 +317,18 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   const maxMonth = useMemo(() => normalizeMonth(maxDate), [maxDate]);
 
   const totalDays = Math.max(1, Math.round((maxDate.getTime() - minDate.getTime()) / (1000 * 3600 * 24)) + 1);
-  
-  if (totalDays > 3650) { // Limit display to 10 years
-    return <div className="p-4 text-center text-red-500">El rango de fechas calculado es demasiado grande para mostrar.</div>;
-  }
+  const isRangeTooLarge = totalDays > 3650;
 
   const projectColumnWidth = 0;
   const timelineWidth = ganttChartWidth > 0 ? ganttChartWidth - projectColumnWidth : 0;
-  const dayWidth = (totalDays > 0 && timelineWidth > 0) ? timelineWidth / totalDays : 0;
+  const visibleTotalDays = isRangeTooLarge ? 1 : totalDays;
+  const dayWidth = (visibleTotalDays > 0 && timelineWidth > 0) ? timelineWidth / visibleTotalDays : 0;
 
   const monthHeaders = useMemo(() => {
-    if (!minDate || !maxDate || totalDays <= 0) return [];
+    if (!minDate || !maxDate || totalDays <= 0 || isRangeTooLarge) return [];
 
     const months = [];
-    let currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    const currentDate = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
 
     while (currentDate <= maxDate) {
       const year = currentDate.getFullYear();
@@ -351,7 +351,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       currentDate.setMonth(currentDate.getMonth() + 1);
     }
     return months;
-  }, [minDate, maxDate, totalDays, dayWidth]);
+  }, [minDate, maxDate, totalDays, dayWidth, isRangeTooLarge]);
 
   const monthPositions = useMemo(() => {
     let cursor = 0;
@@ -394,7 +394,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   }, [monthHeaders]);
 
   const noProductionGaps = useMemo(() => {
-    if (dayWidth <= 0 || calculatedProjects.length === 0) return [];
+    if (isRangeTooLarge || dayWidth <= 0 || calculatedProjects.length === 0) return [];
 
     const dayMs = 1000 * 3600 * 24;
     const minTime = minDate.getTime();
@@ -431,7 +431,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     }
 
     return gaps.filter((gap) => gap.width >= 1);
-  }, [calculatedProjects, dayWidth, minDate, maxDate]);
+  }, [calculatedProjects, dayWidth, minDate, maxDate, isRangeTooLarge]);
 
   // --- Project summary for header hover ---------------------------------------------------------
   const projectSummary = useMemo(() => {
@@ -545,6 +545,10 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     onInteractionChange?.(false);
   }, [isEditingEnabled, onInteractionChange]);
 
+  if (isRangeTooLarge) {
+    return <div className="p-4 text-center text-red-500">El rango de fechas calculado es demasiado grande para mostrar.</div>;
+  }
+
   return (
     <div className="flex min-h-full flex-col">
       <ProductionRateMonthly
@@ -553,8 +557,8 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         onPointsSave={handleDisplayedPointsSave}
         minMonth={minMonth}
         maxMonth={maxMonth}
-        minRate={minRateMap[rateView]}
-        maxRate={maxRateMap[rateView]}
+        minRate={MIN_RATE_MAP[rateView]}
+        maxRate={MAX_RATE_MAP[rateView]}
         rateView={rateView}
         onRateViewChange={setRateView}
         monthPositions={monthPositions}

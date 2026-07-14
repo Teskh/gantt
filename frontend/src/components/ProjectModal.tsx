@@ -90,6 +90,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <label className="block text-sm font-medium mb-1 text-foreground">Tamaño (m²)</label>
           <input
             type="number"
+            min="1"
             className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={m2}
             onChange={e => setM2(e.target.value)}
@@ -101,6 +102,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           <label className="block text-sm font-medium mb-1 text-foreground">GG</label>
           <input
             type="number"
+            min="0.1"
             step="0.1"
             className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={ggStr}
@@ -191,7 +193,10 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
                 name.trim() &&
                 !isNaN(parsedM2) &&
                 !isNaN(parsedGg) &&
-                !isNaN(parsedPriority)
+                !isNaN(parsedPriority) &&
+                parsedM2 > 0 &&
+                parsedGg > 0 &&
+                parsedPriority > 0
               ) {
                 const selectedDate = project ? project.start : new Date(startStr);
                 onSubmit(

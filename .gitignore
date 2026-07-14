@@ -1,5 +1,8 @@
 .aider*
 *.db
+*.db.bak-*
+*.db-shm
+*.db-wal
 #*.md
 .env
 venv/
@@ -7,6 +10,7 @@ __pycache__/
 *.pdf
 *db-journal
 *.bak
+*.patch
 *.svg
 *.png
 *.jpg
