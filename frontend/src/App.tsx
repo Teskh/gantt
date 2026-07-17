@@ -4,16 +4,12 @@ import './App.css'
 import { ProductionGantt } from './components/ProductionGantt'
 import { ProjectModal } from './components/ProjectModal'
 import { ScenarioManager, type Scenario } from './components/ScenarioManager'
+import { ActivityLog } from './components/ActivityLog'
+import { LoginScreen } from './components/LoginScreen'
 import { ThemeProvider } from './components/theme-provider'
-import { apiFetch, apiUrl } from './lib/api'
+import { apiFetch, apiRequest } from './lib/api'
 import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
 import { canApplyScenarioSnapshot, isCurrentOrNewerRevision } from './lib/sync'
-// UI-only accidental-edit guard. The backend does not authenticate this password.
-const EDIT_PASSWORD = 'gantt';
-const EDIT_UNLOCK_DURATION_HOURS = 4;
-const EDIT_UNLOCK_DURATION_MS = EDIT_UNLOCK_DURATION_HOURS * 60 * 60 * 1000;
-const EDIT_UNLOCK_STORAGE_KEY = 'gantt.editUnlockUntil';
-const EDIT_ACCESS_DENIED_MESSAGE = 'Edicion bloqueada. Usa el candado en la esquina superior derecha.';
 
 export interface Project {
   id: number;
@@ -31,6 +27,12 @@ export interface ProductionRatePoint {
   month: Date;
   rate: number;
   isActive: boolean;
+}
+
+export interface AuthUser {
+  email: string;
+  displayName: string;
+  microsoftId: string | null;
 }
 
 
@@ -52,7 +54,6 @@ interface ScenarioSnapshot {
 interface AppSettings {
   rangeStart: string;
   rangeEnd: string;
-  isLockEnabled?: boolean;
   revision: number;
 }
 
@@ -72,7 +73,13 @@ const parseMonthValue = (value: string): Date | null => {
   return new Date(year, month - 1, 1);
 };
 
-function App() {
+interface AuthenticatedAppProps {
+  currentUser: AuthUser;
+  onLogout: () => void;
+}
+
+function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
+  const canViewActivity = currentUser.email.toLowerCase() === "tschussler@grupopatagual.cl";
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -87,60 +94,12 @@ function App() {
   const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
   const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [activityOpen, setActivityOpen] = useState(false);
   const activeScenarioRef = useRef<Scenario | null>(null);
   const settingsRevisionRef = useRef<number | null>(null);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
-
-  const [unlockUntilMs, setUnlockUntilMs] = useState<number | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [isLockEnabled, setIsLockEnabled] = useState(false);
-
-  const isEditUnlocked = unlockUntilMs !== null && nowMs < unlockUntilMs;
-  const isEditingEnabled = !isLockEnabled || isEditUnlocked;
-  const unlockRemainingMinutes = isEditUnlocked && unlockUntilMs
-    ? Math.max(0, Math.ceil((unlockUntilMs - nowMs) / (60 * 1000)))
-    : 0;
-
-  const persistUnlockUntil = (nextUnlockUntilMs: number | null) => {
-    setUnlockUntilMs(nextUnlockUntilMs);
-    setNowMs(Date.now());
-    if (nextUnlockUntilMs === null) {
-      window.localStorage.removeItem(EDIT_UNLOCK_STORAGE_KEY);
-      return;
-    }
-    window.localStorage.setItem(EDIT_UNLOCK_STORAGE_KEY, String(nextUnlockUntilMs));
-  };
-
-  const ensureEditAccess = (silent = false): boolean => {
-    if (isEditingEnabled) return true;
-    if (!silent) {
-      alert(EDIT_ACCESS_DENIED_MESSAGE);
-    }
-    return false;
-  };
-
-  const handleEditLockToggle = () => {
-    if (!isLockEnabled) return;
-    if (isEditUnlocked) {
-      persistUnlockUntil(null);
-      setProjectModalOpen(false);
-      setActiveProject(null);
-      setIsEditingScenarioName(false);
-      setScenarioNameDraft(activeScenario?.name ?? '');
-      return;
-    }
-
-    const enteredPassword = window.prompt('Ingrese la contrasena para editar:');
-    if (enteredPassword === null) return;
-    if (enteredPassword !== EDIT_PASSWORD) {
-      alert('Contrasena incorrecta.');
-      return;
-    }
-    persistUnlockUntil(Date.now() + EDIT_UNLOCK_DURATION_MS);
-    alert(`Edicion habilitada por ${EDIT_UNLOCK_DURATION_HOURS} horas.`);
-  };
 
   const formatMonthValue = (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -160,7 +119,6 @@ function App() {
     const parsedEnd = parseMonthValue(data.rangeEnd);
     if (parsedStart) setRangeStart(parsedStart);
     if (parsedEnd) setRangeEnd(parsedEnd);
-    setIsLockEnabled(Boolean(data.isLockEnabled));
     settingsRevisionRef.current = data.revision;
     return true;
   }, []);
@@ -168,7 +126,7 @@ function App() {
   const saveRangeSettings = (nextStart: Date, nextEnd: Date) => {
     const expectedRevision = settingsRevisionRef.current;
     if (expectedRevision === null) return;
-    fetch(apiUrl("/api/app-settings"), {
+    apiRequest("/api/app-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -197,7 +155,6 @@ function App() {
   };
 
   const handleRangeStartChange = (value: string) => {
-    if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
     const nextEnd = parsed > rangeEnd ? parsed : rangeEnd;
@@ -207,7 +164,6 @@ function App() {
   };
 
   const handleRangeEndChange = (value: string) => {
-    if (!ensureEditAccess()) return;
     const parsed = parseMonthValue(value);
     if (!parsed) return;
     const nextStart = parsed < rangeStart ? parsed : rangeStart;
@@ -221,33 +177,6 @@ function App() {
       .then(applySettings)
       .catch((error) => reportSyncError(error, "No se pudo cargar la configuracion del servidor."));
   }, [applySettings, reportSyncError]);
-
-  useEffect(() => {
-    const storedUnlockUntil = window.localStorage.getItem(EDIT_UNLOCK_STORAGE_KEY);
-    if (!storedUnlockUntil) return;
-    const parsedUnlockUntil = Number(storedUnlockUntil);
-    if (!Number.isFinite(parsedUnlockUntil) || parsedUnlockUntil <= Date.now()) {
-      window.localStorage.removeItem(EDIT_UNLOCK_STORAGE_KEY);
-      return;
-    }
-    setUnlockUntilMs(parsedUnlockUntil);
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!unlockUntilMs || nowMs < unlockUntilMs) return;
-    persistUnlockUntil(null);
-    setProjectModalOpen(false);
-    setActiveProject(null);
-    setIsEditingScenarioName(false);
-    setScenarioNameDraft(activeScenario?.name ?? '');
-  }, [unlockUntilMs, nowMs, activeScenario]);
 
   const normalizeProductionRatePoints = (points: SerializedProductionRatePoint[]): ProductionRatePoint[] =>
     points
@@ -442,7 +371,6 @@ function App() {
   }, [applySnapshot, reportSyncError]);
 
   const handleProjectUpdate = (projectId: number, newStart: Date) => {
-    if (!ensureEditAccess(true)) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     setProjects(currentProjects =>
@@ -450,7 +378,7 @@ function App() {
         p.id === projectId ? { ...p, start: newStart } : p
       )
     );
-    fetch(apiUrl(`/api/projects/${projectId}`), {
+    apiRequest(`/api/projects/${projectId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start: newStart.toISOString(), expectedRevision: scenario.revision })
@@ -465,12 +393,6 @@ function App() {
   };
 
   const handleScenarioNameSave = () => {
-    if (!ensureEditAccess()) {
-      setIsEditingScenarioName(false)
-      setScenarioNameDraft(activeScenario?.name ?? '')
-      return
-    }
-
     const trimmed = scenarioNameDraft.trim()
 
     if (!trimmed) { // If the name is empty after trimming, just exit edit mode
@@ -485,7 +407,7 @@ function App() {
     } else if (trimmed !== activeScenario.name) {
       const scenario = activeScenario;
       // If active scenario exists and name has changed, update it
-      fetch(apiUrl(`/api/scenarios/${scenario.id}`), {
+      apiRequest(`/api/scenarios/${scenario.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed, expectedRevision: scenario.revision })
@@ -503,7 +425,6 @@ function App() {
   };
 
   const handleScenarioNameEditStart = () => {
-    if (!ensureEditAccess()) return;
     setScenarioNameDraft(activeScenario?.name ?? 'Nuevo Escenario');
     setIsEditingScenarioName(true);
   };
@@ -515,7 +436,6 @@ function App() {
 
   // ---------------- Project CRUD helpers ----------------
   const handleProjectMuteToggle = (projectId: number) => {
-    if (!ensureEditAccess(true)) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     const project = projects.find(p => p.id === projectId);
@@ -528,7 +448,7 @@ function App() {
         p.id === projectId ? { ...p, muted: newMutedState } : p
       )
     );
-    fetch(apiUrl(`/api/projects/${projectId}`), {
+    apiRequest(`/api/projects/${projectId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ muted: newMutedState, expectedRevision: scenario.revision }),
@@ -543,10 +463,9 @@ function App() {
   };
 
   const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
-    if (!ensureEditAccess(true)) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
-    fetch(apiUrl("/api/projects/" + projectId + "/" + action), {
+    apiRequest("/api/projects/" + projectId + "/" + action, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedRevision: scenario.revision }),
@@ -561,10 +480,9 @@ function App() {
   };
 
   const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
-    if (!ensureEditAccess()) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
-    fetch(apiUrl('/api/projects'), {
+    apiRequest('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newProject, start: newProject.start.toISOString(), scenarioId: scenario.id, expectedRevision: scenario.revision })
@@ -579,10 +497,9 @@ function App() {
   };
 
   const handleProjectDelete = (id: number) => {
-    if (!ensureEditAccess()) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
-    fetch(apiUrl("/api/projects/" + id), {
+    apiRequest("/api/projects/" + id, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expectedRevision: scenario.revision }),
@@ -597,11 +514,10 @@ function App() {
   };
 
   const handleProjectChange = (updated: Project) => {
-    if (!ensureEditAccess()) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
-    fetch(apiUrl(`/api/projects/${updated.id}`), {
+    apiRequest(`/api/projects/${updated.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -625,14 +541,12 @@ function App() {
   };
 
   const handleCreateProjectAtDate = (startDate: Date) => {
-    if (!ensureEditAccess()) return;
     setInitialDate(startDate);
     setActiveProject(null);
     setProjectModalOpen(true);
   };
 
   const handleEditProject = (project: Project) => {
-    if (!ensureEditAccess()) return;
     setActiveProject(project);
     setProjectModalOpen(true);
   };
@@ -645,7 +559,6 @@ function App() {
     start: Date,
     color: string | null
   ) => {
-    if (!ensureEditAccess()) return;
     if (activeProject) {
       handleProjectChange({
         ...activeProject,
@@ -664,16 +577,14 @@ function App() {
   };
 
   const handleProductionRateUpdate = (points: ProductionRatePoint[]) => {
-    if (!ensureEditAccess(true)) return;
     setProductionRatePoints(points);
   };
 
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
-    if (!ensureEditAccess(true)) return;
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     setProductionRatePoints(points);
-    fetch(apiUrl(`/api/production-rate-points?scenarioId=${scenario.id}`), {
+    apiRequest(`/api/production-rate-points?scenarioId=${scenario.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -699,7 +610,6 @@ function App() {
   };
 
   const handleScenarioCreate = (nameFromInput?: string) => {
-    if (!ensureEditAccess()) return;
     const name = nameFromInput || window.prompt('Ingrese el nombre del nuevo escenario:', 'Nuevo Escenario');
     if (!name) return;
 
@@ -718,7 +628,6 @@ function App() {
   };
 
   const handleScenarioCopy = (scenarioId: number) => {
-    if (!ensureEditAccess()) return;
     apiFetch<Scenario>(`/api/scenarios/${scenarioId}/copy`, { method: 'POST' })
       .then((newScenario: Scenario) => {
         setScenarios(prev => [...prev, newScenario]);
@@ -732,7 +641,6 @@ function App() {
   };
 
   const handleScenarioDelete = (scenarioId: number) => {
-    if (!ensureEditAccess()) return;
     const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
     if (!scenario) return;
     if (scenarios.length <= 1) {
@@ -741,7 +649,7 @@ function App() {
     }
     if (!window.confirm('¿Está seguro de que desea eliminar este escenario?')) return;
 
-    fetch(apiUrl("/api/scenarios/" + scenarioId), {
+    apiRequest("/api/scenarios/" + scenarioId, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expectedRevision: scenario.revision }),
@@ -782,12 +690,12 @@ function App() {
           rangeEnd={formatMonthValue(rangeEnd)}
           onRangeStartChange={handleRangeStartChange}
           onRangeEndChange={handleRangeEndChange}
-          isLockEnabled={isLockEnabled}
-          isEditUnlocked={isEditingEnabled}
-          unlockRemainingMinutes={unlockRemainingMinutes}
-          onEditLockToggle={handleEditLockToggle}
           hasRemoteChanges={pendingSnapshot !== null}
           onApplyRemoteChanges={() => { if (pendingSnapshot) applySnapshot(pendingSnapshot); }}
+          currentUser={currentUser}
+          canViewActivity={canViewActivity}
+          onOpenActivity={() => setActivityOpen(true)}
+          onLogout={onLogout}
         />
         {syncError && (
           <div
@@ -819,7 +727,7 @@ function App() {
               onProjectReorder={handleProjectReorder}
               rangeStart={rangeStart}
               rangeEnd={rangeEnd}
-              isEditingEnabled={isEditingEnabled}
+              isEditingEnabled={true}
               onInteractionChange={setIsChartInteracting}
             />
           ) : (
@@ -833,12 +741,44 @@ function App() {
             initialDate={initialDate}
             onCancel={() => setProjectModalOpen(false)}
             onSubmit={handleModalSubmit}
-            canEdit={isEditingEnabled}
+            canEdit={true}
           />
         </main>
+        {canViewActivity && (
+          <ActivityLog open={activityOpen} onClose={() => setActivityOpen(false)} />
+        )}
       </div>
     </ThemeProvider>
   )
 }                                                                                                                                                                                                                   
                                                                                                                                                                                                                     
+function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const handleUnauthorized = () => setCurrentUser(null);
+    window.addEventListener("gantt:unauthorized", handleUnauthorized);
+    apiFetch<AuthUser>("/api/auth/me")
+      .then((user) => { if (active) setCurrentUser(user); })
+      .catch(() => { if (active) setCurrentUser(null); });
+    return () => {
+      active = false;
+      window.removeEventListener("gantt:unauthorized", handleUnauthorized);
+    };
+  }, []);
+
+  const handleLogout = () => {
+    apiFetch<{ success: boolean }>("/api/auth/logout", { method: "POST" })
+      .catch(console.error)
+      .finally(() => setCurrentUser(null));
+  };
+
+  if (currentUser === undefined) {
+    return <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Cargando...</div>;
+  }
+  if (currentUser === null) return <LoginScreen />;
+  return <AuthenticatedApp currentUser={currentUser} onLogout={handleLogout} />;
+}
+
 export default App

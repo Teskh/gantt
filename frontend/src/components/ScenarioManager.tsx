@@ -7,7 +7,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, Copy, Lock, LockOpen, PlusSquare, Trash } from 'lucide-react';
+import { ChevronDown, Copy, History, LogOut, PlusSquare, Trash, User } from 'lucide-react';
 import { ModeToggle } from './ui/mode-toggle';
 
 export interface Scenario {
@@ -33,12 +33,12 @@ interface ScenarioManagerProps {
   rangeEnd: string;
   onRangeStartChange: (value: string) => void;
   onRangeEndChange: (value: string) => void;
-  isLockEnabled: boolean;
-  isEditUnlocked: boolean;
-  unlockRemainingMinutes: number;
-  onEditLockToggle: () => void;
   hasRemoteChanges: boolean;
   onApplyRemoteChanges: () => void;
+  currentUser: { email: string; displayName: string };
+  canViewActivity: boolean;
+  onOpenActivity: () => void;
+  onLogout: () => void;
 }
 
 export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
@@ -58,12 +58,12 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
   rangeEnd,
   onRangeStartChange,
   onRangeEndChange,
-  isLockEnabled,
-  isEditUnlocked,
-  unlockRemainingMinutes,
-  onEditLockToggle,
   hasRemoteChanges,
   onApplyRemoteChanges,
+  currentUser,
+  canViewActivity,
+  onOpenActivity,
+  onLogout,
 }) => {
   const handleCopy = () => {
     if (activeScenario) {
@@ -102,11 +102,8 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
           ) : (
             <div className="flex h-8 w-64 items-center justify-between text-foreground">
               <span
-                className={`flex-grow truncate px-2 text-sm ${isEditUnlocked ? 'cursor-pointer' : 'cursor-not-allowed text-muted-foreground'}`}
-                onClick={() => {
-                  if (!isEditUnlocked) return;
-                  onScenarioNameEditStart();
-                }}
+                className="flex-grow cursor-pointer truncate px-2 text-sm"
+                onClick={onScenarioNameEditStart}
               >
                 {activeScenario?.name ?? 'Seleccionar un escenario'}
               </span>
@@ -135,7 +132,7 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             type="button"
             className="h-8 w-8 border-l border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
             onClick={handleCopy}
-            disabled={!activeScenario || !isEditUnlocked}
+            disabled={!activeScenario}
           >
             <Copy className="mx-auto h-3.5 w-3.5" />
           </button>
@@ -143,7 +140,7 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             type="button"
             className="h-8 w-8 border-l border-border text-muted-foreground hover:text-red-600 disabled:opacity-40"
             onClick={handleDelete}
-            disabled={!activeScenario || !isEditUnlocked}
+            disabled={!activeScenario}
           >
             <Trash className="mx-auto h-3.5 w-3.5" />
           </button>
@@ -151,7 +148,6 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
             type="button"
             className="h-8 w-8 border-l border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
             onClick={() => onScenarioCreate()}
-            disabled={!isEditUnlocked}
           >
             <PlusSquare className="mx-auto h-3.5 w-3.5" />
           </button>
@@ -176,32 +172,33 @@ export const ScenarioManager: React.FC<ScenarioManagerProps> = ({
               type="month"
               value={rangeStart}
               onChange={(e) => onRangeStartChange(e.target.value)}
-              disabled={!isEditUnlocked}
-              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60 disabled:cursor-not-allowed disabled:opacity-60"
+              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60"
             />
             <span>→</span>
             <input
               type="month"
               value={rangeEnd}
               onChange={(e) => onRangeEndChange(e.target.value)}
-              disabled={!isEditUnlocked}
-              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60 disabled:cursor-not-allowed disabled:opacity-60"
+              className="h-7 rounded bg-transparent px-2 text-[11px] font-semibold text-foreground outline-none focus:ring-1 focus:ring-amber-500/60"
             />
           </div>
         </div>
       </div>
       <div className="flex items-center gap-3 text-[10px] uppercase tracking-wide text-muted-foreground">
-        {isLockEnabled && (
-          <button
-            type="button"
-            onClick={onEditLockToggle}
-            className={`inline-flex h-8 items-center gap-1 rounded border px-2 text-[10px] font-bold uppercase tracking-wide transition-colors ${isEditUnlocked ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20' : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}
-            title={isEditUnlocked ? `Edicion habilitada por ${unlockRemainingMinutes} min` : 'Edicion bloqueada'}
-          >
-            {isEditUnlocked ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-            <span>{isEditUnlocked ? `${unlockRemainingMinutes}m` : 'Bloq'}</span>
+        <span className="hidden max-w-52 items-center gap-1.5 normal-case tracking-normal text-foreground lg:flex" title={currentUser.email}>
+          <User className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="truncate">{currentUser.displayName}</span>
+        </span>
+        {canViewActivity && (
+          <button type="button" onClick={onOpenActivity} className="inline-flex h-8 items-center gap-1 px-2 hover:text-foreground">
+            <History className="h-3.5 w-3.5" />
+            Actividad
           </button>
         )}
+        <button type="button" onClick={onLogout} className="inline-flex h-8 items-center gap-1 px-2 hover:text-foreground" title="Cerrar sesion">
+          <LogOut className="h-3.5 w-3.5" />
+          Salir
+        </button>
         <ModeToggle />
       </div>
     </header>
