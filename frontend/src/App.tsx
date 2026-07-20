@@ -6,10 +6,11 @@ import { ProjectModal } from './components/ProjectModal'
 import { ScenarioManager, type Scenario } from './components/ScenarioManager'
 import { ActivityLog } from './components/ActivityLog'
 import { LoginScreen } from './components/LoginScreen'
+import { ProjectActivityCard } from './components/ProjectActivityCard'
 import { ThemeProvider } from './components/theme-provider'
 import { apiFetch, apiRequest } from './lib/api'
 import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
-import { canApplyScenarioSnapshot, isCurrentOrNewerRevision } from './lib/sync'
+import { canApplyScenarioSnapshot, isStrictlyNewerRevision } from './lib/sync'
 
 export interface Project {
   id: number;
@@ -21,6 +22,7 @@ export interface Project {
   muted: boolean;
   displayOrder: number;
   color: string | null;
+  baseProjectId: number;
 }
 
 export interface ProductionRatePoint {
@@ -85,6 +87,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [productionRatePoints, setProductionRatePoints] = useState<ProductionRatePoint[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [projectCardId, setProjectCardId] = useState<number | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [isChartInteracting, setIsChartInteracting] = useState(false);
   const [pendingSnapshot, setPendingSnapshot] = useState<ScenarioSnapshot | null>(null);
@@ -113,7 +116,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
 
   const applySettings = useCallback((data: AppSettings) => {
     const currentRevision = settingsRevisionRef.current;
-    if (!isCurrentOrNewerRevision(currentRevision, data.revision)) return false;
+    if (!isStrictlyNewerRevision(currentRevision, data.revision)) return false;
 
     const parsedStart = parseMonthValue(data.rangeStart);
     const parsedEnd = parseMonthValue(data.rangeEnd);
@@ -255,29 +258,48 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           apiFetch<AppSettings>("/api/app-settings", { signal: controller.signal }),
         ]);
         if (cancelled || activeScenarioRef.current?.id !== activeScenarioId) return;
-        setScenarios((current) =>
-          currentScenarios.map((incoming) => {
+        setScenarios((current) => {
+          const merged = currentScenarios.map((incoming) => {
             const existing = current.find((scenario) => scenario.id === incoming.id);
-            return existing && existing.revision > incoming.revision ? existing : incoming;
-          })
-        );
+            if (
+              existing &&
+              existing.revision >= incoming.revision &&
+              existing.name === incoming.name
+            ) {
+              return existing;
+            }
+            return incoming;
+          });
+          const unchanged =
+            merged.length === current.length &&
+            merged.every((scenario, index) => scenario === current[index]);
+          return unchanged ? current : merged;
+        });
         applySettings(settings);
-        if (!currentScenarios.some((scenario) => scenario.id === activeScenarioId)) {
+        const incomingActiveScenario = currentScenarios.find(
+          (scenario) => scenario.id === activeScenarioId
+        );
+        if (!incomingActiveScenario) {
           const nextScenario = currentScenarios[0] ?? null;
           activeScenarioRef.current = nextScenario;
           setActiveScenario(nextScenario);
+          return;
+        }
+        const currentScenario = activeScenarioRef.current;
+        if (!currentScenario || incomingActiveScenario.revision <= currentScenario.revision) {
+          setSyncError(null);
           return;
         }
         const snapshot = await apiFetch<ScenarioSnapshot>(
           "/api/scenarios/" + activeScenarioId + "/snapshot",
           { signal: controller.signal }
         );
-        const currentScenario = activeScenarioRef.current;
-        if (cancelled || !canApplyScenarioSnapshot(currentScenario, snapshot.scenario)) {
+        const latestScenario = activeScenarioRef.current;
+        if (cancelled || !canApplyScenarioSnapshot(latestScenario, snapshot.scenario)) {
           return;
         }
         if (projectModalOpen || isEditingScenarioName || isChartInteracting) {
-          if (snapshot.scenario.revision > currentScenario.revision) {
+          if (snapshot.scenario.revision > latestScenario.revision) {
             setPendingSnapshot((current) =>
               !current || snapshot.scenario.revision >= current.scenario.revision
                 ? snapshot
@@ -479,7 +501,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
-  const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder'>) => {
+  const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder' | 'baseProjectId'>) => {
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     apiRequest('/api/projects', {
@@ -492,23 +514,6 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
         if (!result) return;
         updateActiveRevision(scenario.id, result.revision);
         setProjects(prev => [...prev, normalizeProject(result.project)]);
-      })
-      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
-  };
-
-  const handleProjectDelete = (id: number) => {
-    const scenario = activeScenarioRef.current;
-    if (!scenario) return;
-    apiRequest("/api/projects/" + id, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: scenario.revision }),
-    })
-      .then((response) => handleScenarioWriteResponse(response, scenario.id))
-      .then((result) => {
-        if (!result) return;
-        updateActiveRevision(scenario.id, result.revision);
-        setProjects(prev => prev.filter(p => p.id !== id));
       })
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
@@ -547,6 +552,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   };
 
   const handleEditProject = (project: Project) => {
+    setProjectCardId(null);
     setActiveProject(project);
     setProjectModalOpen(true);
   };
@@ -604,6 +610,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const handleScenarioChange = (scenarioId: number) => {
     const newActiveScenario = scenarios.find(s => s.id === scenarioId);
     if (newActiveScenario) {
+      setProjectCardId(null);
       activeScenarioRef.current = newActiveScenario;
       setActiveScenario(newActiveScenario);
     }
@@ -616,7 +623,10 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
     apiFetch<Scenario>('/api/scenarios', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
+      body: JSON.stringify({
+        name,
+        ...(activeScenarioRef.current ? { sourceScenarioId: activeScenarioRef.current.id } : {}),
+      })
     })
       .then((newScenario: Scenario) => {
         activeScenarioRef.current = newScenario;
@@ -720,8 +730,8 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
               onProjectUpdate={handleProjectUpdate}
               onProductionRatePointsChange={handleProductionRateUpdate}
               onProductionRatePointsSave={handleProductionRateSave}
+              onProjectOpen={(project) => setProjectCardId(project.id)}
               onProjectEdit={handleEditProject}
-              onProjectDelete={handleProjectDelete}
               onCreateProjectAtDate={handleCreateProjectAtDate}
               onProjectMuteToggle={handleProjectMuteToggle}
               onProjectReorder={handleProjectReorder}
@@ -742,6 +752,11 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
             onCancel={() => setProjectModalOpen(false)}
             onSubmit={handleModalSubmit}
             canEdit={true}
+          />
+          <ProjectActivityCard
+            project={projectCardId === null ? null : projects.find((project) => project.id === projectCardId) ?? null}
+            onClose={() => setProjectCardId(null)}
+            onEdit={handleEditProject}
           />
         </main>
         {canViewActivity && (

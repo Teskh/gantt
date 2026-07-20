@@ -21,7 +21,7 @@ import {
   ContextMenuSeparator,
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
-import { Pencil, PlusCircle, Trash2, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
+import { Pencil, PlusCircle, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
 
 interface ProductionGanttProps {
   projects: Project[];
@@ -29,8 +29,8 @@ interface ProductionGanttProps {
   onProjectUpdate: (projectId: number, newStart: Date) => void;
   onProductionRatePointsChange: (points: ProductionRatePoint[]) => void;
   onProductionRatePointsSave?: (points: ProductionRatePoint[]) => void;
+  onProjectOpen: (project: Project) => void;
   onProjectEdit: (project: Project) => void;
-  onProjectDelete: (id: number) => void;
   onCreateProjectAtDate: (startDate: Date) => void;
   onProjectMuteToggle: (projectId: number) => void;
   onProjectReorder: (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => void;
@@ -100,8 +100,8 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   onProjectUpdate, 
   onProductionRatePointsChange, 
   onProductionRatePointsSave,
+  onProjectOpen,
   onProjectEdit,
-  onProjectDelete,
   onCreateProjectAtDate,
   onProjectMuteToggle,
   onProjectReorder,
@@ -116,6 +116,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   const [ganttChartWidth, setGanttChartWidth] = useState(100); // Set reasonable initial width
   const [dragInfo, setDragInfo] = useState<{ projectId: number; dragOffset: number } | null>(null);
   const [dragFeedback, setDragFeedback] = useState<{ left: number; date: string } | null>(null);
+  const suppressProjectClickRef = useRef(false);
   const [textMeasurements, setTextMeasurements] = useState<{ [projectId: number]: { width: number; fits: boolean } }>({});
 
   /* ---------- Production-rate view (daily / weekly / monthly / yearly) ---------- */
@@ -152,7 +153,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     onProductionRatePointsSave?.(toDailyPoints(points));
   };
 
-  const handleProjectAction = (action: 'add' | 'edit' | 'delete') => {
+  const handleProjectAction = (action: 'add' | 'edit') => {
     if (!isEditingEnabled) {
       setContextMenuProject(null);
       setContextMenuDate(null);
@@ -163,10 +164,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       onCreateProjectAtDate(date);
     } else if (action === 'edit' && contextMenuProject) {
       onProjectEdit(contextMenuProject);
-    } else if (action === 'delete' && contextMenuProject) {
-      if (window.confirm(`¿Estás seguro de que quieres eliminar "${contextMenuProject.name}"?`)) {
-        onProjectDelete(contextMenuProject.id);
-      }
     }
     setContextMenuProject(null);
     setContextMenuDate(null);
@@ -484,6 +481,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       e.preventDefault();
       return;
     }
+    suppressProjectClickRef.current = true;
     const barElement = e.currentTarget as HTMLDivElement;
     const offset = e.clientX - barElement.getBoundingClientRect().left;
     e.dataTransfer.setData("application/json", JSON.stringify({ projectId, dragOffset: offset }));
@@ -759,12 +757,28 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                {/* This inner div is the actual draggable element */}
                                <div
                                  draggable={isEditingEnabled}
-                                 onDoubleClick={() => { if (!isEditingEnabled) return; onProjectMuteToggle(project.id); }}
+                                 role="button"
+                                 tabIndex={0}
+                                 onClick={() => {
+                                   if (suppressProjectClickRef.current) return;
+                                   onProjectOpen(project);
+                                 }}
+                                 onKeyDown={(event) => {
+                                   if (event.key === 'Enter' || event.key === ' ') {
+                                     event.preventDefault();
+                                     onProjectOpen(project);
+                                   }
+                                 }}
                                  onDragStart={(e) => handleDragStart(e, project.id)}
-                                 onDragEnd={() => { setDragInfo(null); setDragFeedback(null); onInteractionChange?.(false); }}
+                                 onDragEnd={() => {
+                                   setDragInfo(null);
+                                   setDragFeedback(null);
+                                   onInteractionChange?.(false);
+                                   window.setTimeout(() => { suppressProjectClickRef.current = false; }, 0);
+                                 }}
                                  className={cn(
                                    "h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
-                                    isEditingEnabled ? "cursor-move" : "cursor-default",
+                                    isEditingEnabled ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                                    project.muted
                                      ? "project-bar-muted border-dashed"
                                      : "project-bar"
@@ -898,14 +912,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                         Silenciar proyecto
                       </>
                     )}
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onClick={() => handleProjectAction('delete')}
-                    variant="destructive"
-                    disabled={!isEditingEnabled}
-                  >
-                    <Trash2 />
-                    Eliminar proyecto
                   </ContextMenuItem>
                 </>
               )}

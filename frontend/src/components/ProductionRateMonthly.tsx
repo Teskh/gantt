@@ -24,6 +24,7 @@ const clamp = (value: number, min: number, max: number) =>
 const chartHeight = 240;
 const chartPaddingY = 18;
 const chartBottomPadding = 0;
+const dragThresholdPx = 3;
 
 export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   points,
@@ -47,6 +48,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const lastUpdatedRef = useRef<ProductionRatePoint[] | null>(null);
+  const dragStartYRef = useRef<number | null>(null);
 
   const rateSpan = Math.max(1, maxRate - minRate);
   const plotHeight = chartHeight - chartPaddingY - chartBottomPadding;
@@ -159,6 +161,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
 
   const finishDrag = useCallback(() => {
     setDraggingKey(null);
+    dragStartYRef.current = null;
     onInteractionChange?.(false);
     setHoveredKey(null);
     if (lastUpdatedRef.current) {
@@ -170,6 +173,14 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   useEffect(() => {
     if (!draggingKey) return;
     const handlePointerMove = (event: PointerEvent) => {
+      const startY = dragStartYRef.current;
+      if (
+        lastUpdatedRef.current === null &&
+        startY !== null &&
+        Math.abs(event.clientY - startY) < dragThresholdPx
+      ) {
+        return;
+      }
       applyRateChange(draggingKey, event.clientY);
     };
     const handlePointerUp = () => finishDrag();
@@ -195,6 +206,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     setHoveredKey(null);
     onInteractionChange?.(false);
     lastUpdatedRef.current = null;
+    dragStartYRef.current = null;
   }, [isEditingEnabled, onInteractionChange]);
 
   const unitLabel =
@@ -347,10 +359,11 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
                 onPointerDown={(event) => {
                   if (!isEditingEnabled) return;
                   event.preventDefault();
+                  dragStartYRef.current = event.clientY;
+                  lastUpdatedRef.current = null;
                   setDraggingKey(point.key);
                   onInteractionChange?.(true);
                   setHoveredKey(point.key);
-                  applyRateChange(point.key, event.clientY);
                 }}
                 onDoubleClick={(event) => {
                   if (!isEditingEnabled) return;
