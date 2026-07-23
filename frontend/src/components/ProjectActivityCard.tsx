@@ -12,10 +12,13 @@ import type { Project } from "@/App";
 import {
   apiFetch,
   apiRequest,
-  SYNC_EVENT_NAME,
-  type SyncEvent,
 } from "@/lib/api";
-import type { ProjectActivityEntry, ProjectCardData } from "@/lib/project-tracking";
+import type {
+  AssignedProjectStatus,
+  ProjectActivityEntry,
+  ProjectCardData,
+  StatusDefinition,
+} from "@/lib/project-tracking";
 import { StatusSettingsDialog } from "./StatusSettingsDialog";
 
 interface ProjectActivityCardProps {
@@ -24,16 +27,9 @@ interface ProjectActivityCardProps {
   onEdit: (project: Project) => void;
 }
 
-const readMutationCard = async (response: Response, fallback: string) => {
-  const payload = await response.json().catch(() => ({})) as {
-    error?: string;
-    card?: ProjectCardData;
-  };
-  if (!response.ok) {
-    throw new Error(typeof payload.error === "string" ? payload.error : fallback);
-  }
-  if (!payload.card) throw new Error(fallback);
-  return payload.card;
+const readError = async (response: Response, fallback: string) => {
+  const payload = await response.json().catch(() => ({}));
+  return typeof payload.error === "string" ? payload.error : fallback;
 };
 
 const formatActivityTime = (value: string) =>
@@ -69,22 +65,10 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   const activeProjectId = project?.id ?? null;
   const activeProjectIdRef = useRef(activeProjectId);
   const backgroundSyncPausedRef = useRef(false);
-  const cardRef = useRef<ProjectCardData | null>(null);
-  const remoteRefreshPendingRef = useRef(false);
 
   activeProjectIdRef.current = activeProjectId;
-  cardRef.current = card;
   backgroundSyncPausedRef.current =
     settingsOpen || statusPickerOpen || savingNote || changingStatusId !== null;
-
-  const hasFocusedFormControl = useCallback(() => {
-    const focusedElement = document.activeElement;
-    return (
-      focusedElement instanceof HTMLElement &&
-      panelRef.current?.contains(focusedElement) &&
-      focusedElement.matches("input, textarea, select")
-    );
-  }, []);
 
   const loadCard = useCallback(async (silent = false) => {
     if (activeProjectId === null) return;
@@ -96,13 +80,6 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         requestSequence !== requestSequenceRef.current ||
         activeProjectIdRef.current !== activeProjectId
       ) {
-        return;
-      }
-      if (
-        silent &&
-        (backgroundSyncPausedRef.current || hasFocusedFormControl())
-      ) {
-        remoteRefreshPendingRef.current = true;
         return;
       }
       setCard((current) => sameCardData(current, data) ? current : data);
@@ -118,26 +95,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
     } finally {
       if (!silent && requestSequence === requestSequenceRef.current) setLoading(false);
     }
-  }, [activeProjectId, hasFocusedFormControl]);
-
-  const applyMutationCard = useCallback((nextCard: ProjectCardData) => {
-    requestSequenceRef.current += 1;
-    remoteRefreshPendingRef.current = false;
-    setCard(nextCard);
-    setError(null);
-  }, []);
-
-  const applyPendingRemoteRefresh = useCallback(() => {
-    if (
-      !remoteRefreshPendingRef.current ||
-      backgroundSyncPausedRef.current ||
-      hasFocusedFormControl()
-    ) {
-      return;
-    }
-    remoteRefreshPendingRef.current = false;
-    void loadCard(true);
-  }, [hasFocusedFormControl, loadCard]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (activeProjectId === null) {
@@ -150,10 +108,15 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
     setStatusPickerOpen(false);
     void loadCard();
     const timer = window.setInterval(() => {
+      const focusedElement = document.activeElement;
+      const formControlFocused =
+        focusedElement instanceof HTMLElement &&
+        panelRef.current?.contains(focusedElement) &&
+        focusedElement.matches("input, textarea, select");
       if (
         document.visibilityState !== "visible" ||
         backgroundSyncPausedRef.current ||
-        hasFocusedFormControl()
+        formControlFocused
       ) {
         return;
       }
@@ -163,38 +126,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
       requestSequenceRef.current += 1;
       window.clearInterval(timer);
     };
-  }, [activeProjectId, hasFocusedFormControl, loadCard]);
-
-  useEffect(() => {
-    if (activeProjectId === null) return;
-    const handleSync = (event: Event) => {
-      const detail = (event as CustomEvent<SyncEvent>).detail;
-      const affectsCard =
-        detail.type === "status-catalog" ||
-        (
-          detail.type === "project-card" &&
-          detail.baseProjectId === cardRef.current?.baseProjectId
-        );
-      if (!affectsCard) return;
-      if (backgroundSyncPausedRef.current || hasFocusedFormControl()) {
-        remoteRefreshPendingRef.current = true;
-        return;
-      }
-      void loadCard(true);
-    };
-    window.addEventListener(SYNC_EVENT_NAME, handleSync);
-    return () => window.removeEventListener(SYNC_EVENT_NAME, handleSync);
-  }, [activeProjectId, hasFocusedFormControl, loadCard]);
-
-  useEffect(() => {
-    applyPendingRemoteRefresh();
-  }, [
-    settingsOpen,
-    statusPickerOpen,
-    savingNote,
-    changingStatusId,
-    applyPendingRemoteRefresh,
-  ]);
+  }, [activeProjectId, loadCard]);
 
   useEffect(() => {
     if (!project) return;
@@ -218,6 +150,27 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
 
   if (!project) return null;
 
+  const applyAssignedStatus = (status: AssignedProjectStatus) => {
+    requestSequenceRef.current += 1;
+    setCard((current) => {
+      if (!current) return current;
+      const alreadyAssigned = current.statuses.some(
+        (candidate) => candidate.definitionId === status.definitionId
+      );
+      return {
+        ...current,
+        statuses: alreadyAssigned
+          ? current.statuses.map((candidate) =>
+            candidate.definitionId === status.definitionId ? status : candidate
+          )
+          : [...current.statuses, status],
+        availableDefinitions: current.availableDefinitions.filter(
+          (definition) => definition.id !== status.definitionId
+        ),
+      };
+    });
+  };
+
   const addStatus = async (definitionId: number) => {
     if (!definitionId) return;
     setStatusPickerOpen(false);
@@ -229,7 +182,9 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ definitionId }),
       });
-      applyMutationCard(await readMutationCard(response, "No se pudo asignar el estado."));
+      if (!response.ok) throw new Error(await readError(response, "No se pudo asignar el estado."));
+      const assigned = await response.json() as AssignedProjectStatus;
+      applyAssignedStatus(assigned);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo asignar el estado.");
     } finally {
@@ -248,7 +203,8 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ optionId, expectedRevision: current.revision }),
       });
-      applyMutationCard(await readMutationCard(response, "No se pudo actualizar el estado."));
+      if (!response.ok) throw new Error(await readError(response, "No se pudo actualizar el estado."));
+      applyAssignedStatus(await response.json() as AssignedProjectStatus);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo actualizar el estado.");
       await loadCard(true);
@@ -268,7 +224,25 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ expectedRevision: current.revision }),
       });
-      applyMutationCard(await readMutationCard(response, "No se pudo quitar el estado."));
+      if (!response.ok) throw new Error(await readError(response, "No se pudo quitar el estado."));
+      const restoredDefinition: StatusDefinition = {
+        id: definitionId,
+        name,
+        displayOrder: Number.MAX_SAFE_INTEGER,
+        options: current.options.filter((option) => !option.archived),
+      };
+      requestSequenceRef.current += 1;
+      setCard((currentCard) => currentCard ? {
+        ...currentCard,
+        statuses: currentCard.statuses.filter(
+          (status) => status.definitionId !== definitionId
+        ),
+        availableDefinitions: currentCard.availableDefinitions.some(
+          (definition) => definition.id === definitionId
+        )
+          ? currentCard.availableDefinitions
+          : [...currentCard.availableDefinitions, restoredDefinition],
+      } : currentCard);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo quitar el estado.");
       await loadCard(true);
@@ -288,9 +262,9 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body }),
       });
-      const nextCard = await readMutationCard(response, "No se pudo guardar la nota.");
+      if (!response.ok) throw new Error(await readError(response, "No se pudo guardar la nota."));
       setNote("");
-      applyMutationCard(nextCard);
+      await loadCard(true);
     } catch (noteError) {
       setError(noteError instanceof Error ? noteError.message : "No se pudo guardar la nota.");
     } finally {
@@ -308,7 +282,6 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
           aria-labelledby="project-card-title"
           className="flex h-full w-full max-w-xl flex-col border-l border-border bg-background"
           onMouseDown={(event) => event.stopPropagation()}
-          onBlurCapture={() => queueMicrotask(applyPendingRemoteRefresh)}
         >
           <header className="shrink-0 border-b border-border">
             <div className="flex items-start justify-between gap-4 px-5 py-4">

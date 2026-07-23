@@ -17,20 +17,6 @@ const configuredCorsOrigins = new Set(
     .filter(Boolean)
 );
 const ACTIVITY_VIEWER_EMAIL = "tschussler@grupopatagual.cl";
-const syncClients = new Set();
-
-const broadcastSync = (event, sourceClientId = null) => {
-  const payload = `data: ${JSON.stringify(event)}\n\n`;
-  syncClients.forEach((client) => {
-    if (sourceClientId && client.clientId === sourceClientId) return;
-    client.response.write(payload);
-  });
-};
-
-const sourceClientIdFrom = (req) => {
-  const value = String(req.get("X-Gantt-Client-Id") || "").trim();
-  return value.slice(0, 100) || null;
-};
 
 app.use(cors((req, callback) => {
   const origin = req.get("Origin");
@@ -39,10 +25,6 @@ app.use(cors((req, callback) => {
   callback(null, { origin: isAllowed ? origin || false : false, credentials: true });
 }));
 app.use(express.json());
-app.use("/api", (_req, res, next) => {
-  res.set("Cache-Control", "no-store");
-  next();
-});
 
 const dataDir = path.join(__dirname, "..", "data");
 const dbPath = process.env.DB_PATH
@@ -361,28 +343,6 @@ const auth = createAuth(db);
 auth.registerPublicRoutes(app);
 app.use("/api", auth.requireAuth);
 
-app.get("/api/sync-events", (req, res) => {
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.flushHeaders();
-  res.write("retry: 3000\n\n");
-
-  const client = {
-    clientId: String(req.query.clientId || "").slice(0, 100),
-    response: res,
-  };
-  syncClients.add(client);
-  const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 25_000);
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    syncClients.delete(client);
-  });
-});
-
 app.get("/api/audit-logs", (req, res) => {
   if (req.user.email.toLowerCase() !== ACTIVITY_VIEWER_EMAIL) {
     return res.status(403).json({ error: "Activity log access denied" });
@@ -582,9 +542,7 @@ app.post("/api/scenarios", (req, res) => {
     });
     return { id: scenarioId, name, revision: 0 };
   });
-  const scenario = createScenario();
-  broadcastSync({ type: "scenarios" }, sourceClientIdFrom(req));
-  res.status(201).json(scenario);
+  res.status(201).json(createScenario());
 });
 
 app.put("/api/scenarios/:id", (req, res) => {
@@ -614,7 +572,6 @@ app.put("/api/scenarios/:id", (req, res) => {
   });
   const renamed = renameScenario();
   if (!renamed) return sendScenarioConflict(res, id);
-  broadcastSync({ type: "scenarios" }, sourceClientIdFrom(req));
   res.json(renamed);
 });
 
@@ -679,9 +636,7 @@ app.post("/api/scenarios/:id/copy", (req, res) => {
     });
     return { id: newScenarioId, name: copyName, revision: 0 };
   });
-  const copied = transaction();
-  broadcastSync({ type: "scenarios" }, sourceClientIdFrom(req));
-  res.status(201).json(copied);
+  res.status(201).json(transaction());
 });
 
 app.delete("/api/scenarios/:id", (req, res) => {
@@ -706,7 +661,6 @@ app.delete("/api/scenarios/:id", (req, res) => {
   });
   const result = deleteScenario();
   if (result.changes === 0) return sendScenarioConflict(res, id);
-  broadcastSync({ type: "scenarios" }, sourceClientIdFrom(req));
   res.json({ id });
 });
 
@@ -770,7 +724,6 @@ app.put("/api/app-settings", (req, res) => {
     });
   }
 
-  broadcastSync({ type: "settings" }, sourceClientIdFrom(req));
   res.json({
     rangeStart: normalizedStart.slice(0, 7),
     rangeEnd: normalizedEnd.slice(0, 7),
@@ -818,11 +771,7 @@ app.post("/api/status-definitions", (req, res) => {
       return definitionId;
     });
     const definitionId = createDefinition();
-    const definition = readStatusDefinitions().find(
-      (candidate) => candidate.id === Number(definitionId)
-    );
-    broadcastSync({ type: "status-catalog" }, sourceClientIdFrom(req));
-    res.status(201).json(definition);
+    res.status(201).json(readStatusDefinitions().find((definition) => definition.id === Number(definitionId)));
   } catch (error) {
     if (String(error?.code || "").startsWith("SQLITE_CONSTRAINT")) {
       return res.status(409).json({ error: "A status or option with that name already exists" });
@@ -891,11 +840,7 @@ app.put("/api/status-definitions/:id", (req, res) => {
       });
     });
     updateDefinition();
-    const definition = readStatusDefinitions().find(
-      (candidate) => candidate.id === definitionId
-    );
-    broadcastSync({ type: "status-catalog" }, sourceClientIdFrom(req));
-    res.json(definition);
+    res.json(readStatusDefinitions().find((definition) => definition.id === definitionId));
   } catch (error) {
     if (error?.message === "INVALID_STATUS_OPTION") {
       return res.status(400).json({ error: "An option does not belong to this status" });
@@ -932,7 +877,6 @@ app.delete("/api/status-definitions/:id", (req, res) => {
     });
   });
   archiveDefinition();
-  broadcastSync({ type: "status-catalog" }, sourceClientIdFrom(req));
   res.json({ id: definitionId });
 });
 
@@ -1022,7 +966,6 @@ app.post("/api/projects", (req, res) => {
     })
   );
   if (!result) return sendScenarioConflict(res, scenarioId);
-  broadcastSync({ type: "scenarios" }, sourceClientIdFrom(req));
   res.status(201).json({ project: result.value, revision: result.revision });
 });
 
@@ -1117,12 +1060,6 @@ app.put("/api/projects/:id", (req, res) => {
     }
   );
   if (!result) return sendScenarioConflict(res, existing.scenario_id);
-  broadcastSync(
-    sharedChanged
-      ? { type: "scenarios" }
-      : { type: "scenario", scenarioId: existing.scenario_id },
-    sourceClientIdFrom(req)
-  );
   res.json({ project: result.value, revision: result.revision });
 });
 
@@ -1160,10 +1097,6 @@ const reorderProject = (req, res, action, updater) => {
     })
   );
   if (!result) return sendScenarioConflict(res, project.scenario_id);
-  broadcastSync(
-    { type: "scenario", scenarioId: project.scenario_id },
-    sourceClientIdFrom(req)
-  );
   res.json({ success: true, revision: result.revision });
 };
 
@@ -1239,15 +1172,7 @@ app.post("/api/projects/:id/statuses", (req, res) => {
       });
     });
     assignStatus();
-    const status = readAssignedStatus(project.base_project_id, definitionId);
-    broadcastSync(
-      { type: "project-card", baseProjectId: project.base_project_id },
-      sourceClientIdFrom(req)
-    );
-    res.status(201).json({
-      ...status,
-      card: readProjectCard(project.id),
-    });
+    res.status(201).json(readAssignedStatus(project.base_project_id, definitionId));
   } catch (error) {
     if (String(error?.code || "").startsWith("SQLITE_CONSTRAINT")) {
       return res.status(409).json({ error: "This status is already assigned" });
@@ -1335,15 +1260,7 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  const status = readAssignedStatus(project.base_project_id, definitionId);
-  broadcastSync(
-    { type: "project-card", baseProjectId: project.base_project_id },
-    sourceClientIdFrom(req)
-  );
-  res.json({
-    ...status,
-    card: readProjectCard(project.id),
-  });
+  res.json(readAssignedStatus(project.base_project_id, definitionId));
 });
 
 app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
@@ -1401,14 +1318,7 @@ app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  broadcastSync(
-    { type: "project-card", baseProjectId: project.base_project_id },
-    sourceClientIdFrom(req)
-  );
-  res.json({
-    definitionId,
-    card: readProjectCard(project.id),
-  });
+  res.json({ definitionId });
 });
 
 app.post("/api/projects/:id/notes", (req, res) => {
@@ -1435,15 +1345,7 @@ app.post("/api/projects/:id/notes", (req, res) => {
     });
     return db.prepare("SELECT * FROM project_activity WHERE id = ?").get(inserted.lastInsertRowid);
   });
-  const activity = mapProjectActivity(createNote());
-  broadcastSync(
-    { type: "project-card", baseProjectId: project.base_project_id },
-    sourceClientIdFrom(req)
-  );
-  res.status(201).json({
-    ...activity,
-    card: readProjectCard(project.id),
-  });
+  res.status(201).json(mapProjectActivity(createNote()));
 });
 
 // --- Production Rate Points ---
@@ -1534,7 +1436,6 @@ app.put("/api/production-rate-points", (req, res) => {
       })
     );
     if (!result) return sendScenarioConflict(res, scenarioId);
-    broadcastSync({ type: "scenario", scenarioId }, sourceClientIdFrom(req));
     res.json({ count: result.value.count, revision: result.revision });
   } catch (error) {
     console.error(error);

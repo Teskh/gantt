@@ -83,13 +83,7 @@ export function StatusSettingsDialog({ open, onClose, onChanged }: StatusSetting
         }
       );
       if (!response.ok) throw new Error(await readError(response, "No se pudo guardar el estado."));
-      const saved = await response.json() as StatusDefinition;
-      setDefinitions((current) => {
-        const next = current.some((definition) => definition.id === saved.id)
-          ? current.map((definition) => definition.id === saved.id ? saved : definition)
-          : [...current, saved];
-        return next.sort((a, b) => a.displayOrder - b.displayOrder || a.id - b.id);
-      });
+      await loadDefinitions();
       setDraft(null);
       onChanged();
     } catch (saveError) {
@@ -106,7 +100,7 @@ export function StatusSettingsDialog({ open, onClose, onChanged }: StatusSetting
       const response = await apiRequest(`/api/status-definitions/${definition.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error(await readError(response, "No se pudo eliminar el estado."));
       if (draft?.id === definition.id) setDraft(null);
-      setDefinitions((current) => current.filter((candidate) => candidate.id !== definition.id));
+      await loadDefinitions();
       onChanged();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "No se pudo eliminar el estado.");
