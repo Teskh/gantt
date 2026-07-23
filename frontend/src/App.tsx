@@ -8,7 +8,13 @@ import { ActivityLog } from './components/ActivityLog'
 import { LoginScreen } from './components/LoginScreen'
 import { ProjectActivityCard } from './components/ProjectActivityCard'
 import { ThemeProvider } from './components/theme-provider'
-import { apiFetch, apiRequest } from './lib/api'
+import {
+  apiFetch,
+  apiRequest,
+  createSyncEventSource,
+  SYNC_EVENT_NAME,
+  type SyncEvent,
+} from './lib/api'
 import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
 import { canApplyScenarioSnapshot, isStrictlyNewerRevision } from './lib/sync'
 
@@ -100,6 +106,11 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const [activityOpen, setActivityOpen] = useState(false);
   const activeScenarioRef = useRef<Scenario | null>(null);
   const settingsRevisionRef = useRef<number | null>(null);
+  const productionRateSaveInFlightRef = useRef(false);
+  const pendingProductionRateSaveRef = useRef<{
+    scenarioId: number;
+    points: ProductionRatePoint[];
+  } | null>(null);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
@@ -112,6 +123,19 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const reportSyncError = useCallback((error: unknown, message: string) => {
     console.error(error);
     setSyncError(message);
+  }, []);
+
+  useEffect(() => {
+    const source = createSyncEventSource();
+    source.onmessage = (event) => {
+      try {
+        const detail = JSON.parse(event.data) as SyncEvent;
+        window.dispatchEvent(new CustomEvent<SyncEvent>(SYNC_EVENT_NAME, { detail }));
+      } catch (error) {
+        console.error("Invalid synchronization event", error);
+      }
+    };
+    return () => source.close();
   }, []);
 
   const applySettings = useCallback((data: AppSettings) => {
@@ -247,10 +271,15 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   useEffect(() => {
     if (!activeScenarioId) return;
     let inFlight = false;
+    let rerunRequested = false;
     let cancelled = false;
     const controller = new AbortController();
     const poll = async () => {
-      if (document.visibilityState !== "visible" || inFlight) return;
+      if (document.visibilityState !== "visible") return;
+      if (inFlight) {
+        rerunRequested = true;
+        return;
+      }
       inFlight = true;
       try {
         const [currentScenarios, settings] = await Promise.all([
@@ -315,16 +344,32 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
         reportSyncError(error, "No se pudo actualizar la informacion del servidor.");
       } finally {
         inFlight = false;
+        if (rerunRequested && !cancelled) {
+          rerunRequested = false;
+          void poll();
+        }
       }
     };
     const timer = window.setInterval(poll, 5_000);
     const handleVisibilityChange = () => { if (document.visibilityState === "visible") void poll(); };
+    const handleSync = (event: Event) => {
+      const detail = (event as CustomEvent<SyncEvent>).detail;
+      if (
+        detail.type === "scenarios" ||
+        detail.type === "settings" ||
+        (detail.type === "scenario" && detail.scenarioId === activeScenarioId)
+      ) {
+        void poll();
+      }
+    };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener(SYNC_EVENT_NAME, handleSync);
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener(SYNC_EVENT_NAME, handleSync);
     };
   }, [activeScenarioId, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings, reportSyncError]);
 
@@ -586,30 +631,63 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
     setProductionRatePoints(points);
   };
 
+  const flushProductionRateSaves = async () => {
+    if (productionRateSaveInFlightRef.current) return;
+    productionRateSaveInFlightRef.current = true;
+    try {
+      while (pendingProductionRateSaveRef.current) {
+        const pending = pendingProductionRateSaveRef.current;
+        pendingProductionRateSaveRef.current = null;
+        const scenario = activeScenarioRef.current;
+        if (!scenario || scenario.id !== pending.scenarioId) continue;
+        try {
+          const response = await apiRequest(
+            `/api/production-rate-points?scenarioId=${scenario.id}`,
+            {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                expectedRevision: scenario.revision,
+                points: pending.points.map(p => ({
+                  month: serializeMonth(p.month),
+                  rate: p.rate,
+                  isActive: p.isActive,
+                })),
+              })
+            }
+          );
+          const result = await handleScenarioWriteResponse(response, scenario.id);
+          if (!result) {
+            pendingProductionRateSaveRef.current = null;
+            break;
+          }
+          updateActiveRevision(scenario.id, result.revision);
+        } catch (error) {
+          pendingProductionRateSaveRef.current = null;
+          handleScenarioWriteFailure(error, scenario.id);
+          break;
+        }
+      }
+    } finally {
+      productionRateSaveInFlightRef.current = false;
+    }
+  };
+
   const handleProductionRateSave = (points: ProductionRatePoint[]) => {
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
     setProductionRatePoints(points);
-    apiRequest(`/api/production-rate-points?scenarioId=${scenario.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expectedRevision: scenario.revision,
-        points: points.map(p => ({
-          month: serializeMonth(p.month),
-          rate: p.rate,
-          isActive: p.isActive,
-        })),
-      })
-    })
-      .then((response) => handleScenarioWriteResponse(response, scenario.id))
-      .then((result) => { if (result) updateActiveRevision(scenario.id, result.revision); })
-      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
+    pendingProductionRateSaveRef.current = {
+      scenarioId: scenario.id,
+      points,
+    };
+    void flushProductionRateSaves();
   };
 
   const handleScenarioChange = (scenarioId: number) => {
     const newActiveScenario = scenarios.find(s => s.id === scenarioId);
     if (newActiveScenario) {
+      pendingProductionRateSaveRef.current = null;
       setProjectCardId(null);
       activeScenarioRef.current = newActiveScenario;
       setActiveScenario(newActiveScenario);
