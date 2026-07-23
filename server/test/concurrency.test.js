@@ -88,6 +88,22 @@ test("authenticated session exposes the Microsoft user", async () => {
   });
 });
 
+test("API responses are uncached, identifiable, and never fall through to the SPA", async () => {
+  const versionResponse = await jsonRequest("/api/version");
+  assert.equal(versionResponse.status, 200);
+  assert.equal(versionResponse.headers.get("cache-control"), "private, no-store, max-age=0");
+  assert.ok(versionResponse.headers.get("x-app-build"));
+  assert.ok(versionResponse.headers.get("x-app-instance"));
+  assert.match(versionResponse.headers.get("x-database-id"), /^[a-f0-9]{12}$/);
+  const version = await versionResponse.json();
+  assert.equal(typeof version.build, "string");
+  assert.ok(version.frontendAsset === null || typeof version.frontendAsset === "string");
+
+  const missingResponse = await jsonRequest("/api/route-that-does-not-exist");
+  assert.equal(missingResponse.status, 404);
+  assert.deepEqual(await missingResponse.json(), { error: "API route not found" });
+});
+
 test("activity log is visible only to the configured user", async () => {
   const denied = await jsonRequest("/api/audit-logs");
   assert.equal(denied.status, 403);
@@ -315,6 +331,17 @@ test("project statuses and notes are shared across scenario placements", async (
   assert.equal(assignedResponse.status, 201);
   const assigned = await assignedResponse.json();
   assert.equal(assigned.optionId, null);
+  assert.equal(assigned.card.statuses[0].definitionId, definition.id);
+  assert.equal(assigned.card.statuses[0].optionId, null);
+
+  const duplicateResponse = await jsonRequest(`/api/projects/${sharedScenarioProject.id}/statuses`, {
+    method: "POST",
+    body: JSON.stringify({ definitionId: definition.id }),
+  });
+  assert.equal(duplicateResponse.status, 200);
+  const duplicate = await duplicateResponse.json();
+  assert.equal(duplicate.definitionId, definition.id);
+  assert.equal(duplicate.card.statuses.length, 1);
 
   const updatedResponse = await jsonRequest(
     `/api/projects/${sharedPrimaryProject.id}/statuses/${definition.id}`,
@@ -324,6 +351,9 @@ test("project statuses and notes are shared across scenario placements", async (
     }
   );
   assert.equal(updatedResponse.status, 200);
+  const updated = await updatedResponse.json();
+  assert.equal(updated.optionLabel, "Firmado");
+  assert.equal(updated.card.statuses[0].optionLabel, "Firmado");
 
   const staleResponse = await jsonRequest(
     `/api/projects/${sharedScenarioProject.id}/statuses/${definition.id}`,
@@ -342,6 +372,9 @@ test("project statuses and notes are shared across scenario placements", async (
     body: JSON.stringify({ body: "Reunión con el cliente; confirmó la alternativa seleccionada." }),
   });
   assert.equal(noteResponse.status, 201);
+  const note = await noteResponse.json();
+  assert.equal(note.kind, "note");
+  assert.equal(note.card.activity[0].body, "Reunión con el cliente; confirmó la alternativa seleccionada.");
 
   const cardResponse = await jsonRequest(`/api/projects/${sharedScenarioProject.id}/card`);
   assert.equal(cardResponse.status, 200);
@@ -355,6 +388,18 @@ test("project statuses and notes are shared across scenario placements", async (
   assert.ok(card.activity.some((entry) =>
     entry.kind === "status_change" && entry.toOptionLabel === "Firmado"
   ));
+
+  const removedResponse = await jsonRequest(
+    `/api/projects/${sharedScenarioProject.id}/statuses/${definition.id}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ expectedRevision: updated.revision }),
+    }
+  );
+  assert.equal(removedResponse.status, 200);
+  const removed = await removedResponse.json();
+  assert.equal(removed.definitionId, definition.id);
+  assert.equal(removed.card.statuses.length, 0);
 });
 
 test("app settings use the same stale-write protection", async () => {

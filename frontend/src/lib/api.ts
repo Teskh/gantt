@@ -5,6 +5,7 @@ export const apiUrl = (path: string) => `${API_BASE}${path}`;
 export const apiRequest = async (path: string, options?: RequestInit) => {
   const response = await fetch(apiUrl(path), {
     ...options,
+    cache: "no-store",
     credentials: "include",
   });
   if (response.status === 401) {

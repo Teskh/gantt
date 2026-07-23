@@ -9,16 +9,9 @@ import {
   X,
 } from "lucide-react";
 import type { Project } from "@/App";
-import {
-  apiFetch,
-  apiRequest,
-} from "@/lib/api";
-import type {
-  AssignedProjectStatus,
-  ProjectActivityEntry,
-  ProjectCardData,
-  StatusDefinition,
-} from "@/lib/project-tracking";
+import { apiFetch, apiRequest } from "@/lib/api";
+import { readProjectCardMutation } from "@/lib/project-card-mutation";
+import type { ProjectActivityEntry, ProjectCardData } from "@/lib/project-tracking";
 import { StatusSettingsDialog } from "./StatusSettingsDialog";
 
 interface ProjectActivityCardProps {
@@ -26,11 +19,6 @@ interface ProjectActivityCardProps {
   onClose: () => void;
   onEdit: (project: Project) => void;
 }
-
-const readError = async (response: Response, fallback: string) => {
-  const payload = await response.json().catch(() => ({}));
-  return typeof payload.error === "string" ? payload.error : fallback;
-};
 
 const formatActivityTime = (value: string) =>
   new Date(value).toLocaleString("es-CL", {
@@ -58,10 +46,12 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   const [note, setNote] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [changingStatusId, setChangingStatusId] = useState<number | null>(null);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [statusPickerOpen, setStatusPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const requestSequenceRef = useRef(0);
+  const statusMutationInFlightRef = useRef(false);
   const activeProjectId = project?.id ?? null;
   const activeProjectIdRef = useRef(activeProjectId);
   const backgroundSyncPausedRef = useRef(false);
@@ -83,14 +73,22 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         return;
       }
       setCard((current) => sameCardData(current, data) ? current : data);
-      setError(null);
-    } catch {
+      if (!silent) setError(null);
+      setSyncWarning(null);
+    } catch (loadError) {
+      console.error(loadError);
       if (
         !silent &&
         requestSequence === requestSequenceRef.current &&
         activeProjectIdRef.current === activeProjectId
       ) {
         setError("No se pudo cargar la ficha del proyecto.");
+      } else if (
+        silent &&
+        requestSequence === requestSequenceRef.current &&
+        activeProjectIdRef.current === activeProjectId
+      ) {
+        setSyncWarning("No se pudo actualizar la ficha. Los datos visibles podrían estar desactualizados.");
       }
     } finally {
       if (!silent && requestSequence === requestSequenceRef.current) setLoading(false);
@@ -150,31 +148,35 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
 
   if (!project) return null;
 
-  const applyAssignedStatus = (status: AssignedProjectStatus) => {
-    requestSequenceRef.current += 1;
-    setCard((current) => {
-      if (!current) return current;
-      const alreadyAssigned = current.statuses.some(
-        (candidate) => candidate.definitionId === status.definitionId
-      );
-      return {
-        ...current,
-        statuses: alreadyAssigned
-          ? current.statuses.map((candidate) =>
-            candidate.definitionId === status.definitionId ? status : candidate
-          )
-          : [...current.statuses, status],
-        availableDefinitions: current.availableDefinitions.filter(
-          (definition) => definition.id !== status.definitionId
-        ),
-      };
-    });
+  const beginStatusMutation = (definitionId: number) => {
+    if (statusMutationInFlightRef.current) return false;
+    statusMutationInFlightRef.current = true;
+    setChangingStatusId(definitionId);
+    return true;
+  };
+
+  const finishStatusMutation = () => {
+    statusMutationInFlightRef.current = false;
+    setChangingStatusId(null);
+  };
+
+  const applyMutationResponse = async (
+    response: Response,
+    fallbackMessage: string
+  ) => {
+    const payload = await readProjectCardMutation(response, fallbackMessage);
+    if (payload.card) {
+      requestSequenceRef.current += 1;
+      setCard(payload.card);
+      setSyncWarning(null);
+      return;
+    }
+    await loadCard(true);
   };
 
   const addStatus = async (definitionId: number) => {
-    if (!definitionId) return;
+    if (!definitionId || !beginStatusMutation(definitionId)) return;
     setStatusPickerOpen(false);
-    setChangingStatusId(definitionId);
     setError(null);
     try {
       const response = await apiRequest(`/api/projects/${project.id}/statuses`, {
@@ -182,20 +184,17 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ definitionId }),
       });
-      if (!response.ok) throw new Error(await readError(response, "No se pudo asignar el estado."));
-      const assigned = await response.json() as AssignedProjectStatus;
-      applyAssignedStatus(assigned);
+      await applyMutationResponse(response, "No se pudo asignar el estado.");
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo asignar el estado.");
     } finally {
-      setChangingStatusId(null);
+      finishStatusMutation();
     }
   };
 
   const updateStatus = async (definitionId: number, optionId: number) => {
     const current = card?.statuses.find((status) => status.definitionId === definitionId);
-    if (!current) return;
-    setChangingStatusId(definitionId);
+    if (!current || !beginStatusMutation(definitionId)) return;
     setError(null);
     try {
       const response = await apiRequest(`/api/projects/${project.id}/statuses/${definitionId}`, {
@@ -203,20 +202,22 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ optionId, expectedRevision: current.revision }),
       });
-      if (!response.ok) throw new Error(await readError(response, "No se pudo actualizar el estado."));
-      applyAssignedStatus(await response.json() as AssignedProjectStatus);
+      await applyMutationResponse(response, "No se pudo actualizar el estado.");
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo actualizar el estado.");
       await loadCard(true);
     } finally {
-      setChangingStatusId(null);
+      finishStatusMutation();
     }
   };
 
   const removeStatus = async (definitionId: number, name: string) => {
     const current = card?.statuses.find((status) => status.definitionId === definitionId);
-    if (!current || !window.confirm(`¿Quitar “${name}” de este proyecto?`)) return;
-    setChangingStatusId(definitionId);
+    if (
+      !current ||
+      !window.confirm(`¿Quitar “${name}” de este proyecto?`) ||
+      !beginStatusMutation(definitionId)
+    ) return;
     setError(null);
     try {
       const response = await apiRequest(`/api/projects/${project.id}/statuses/${definitionId}`, {
@@ -224,30 +225,12 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ expectedRevision: current.revision }),
       });
-      if (!response.ok) throw new Error(await readError(response, "No se pudo quitar el estado."));
-      const restoredDefinition: StatusDefinition = {
-        id: definitionId,
-        name,
-        displayOrder: Number.MAX_SAFE_INTEGER,
-        options: current.options.filter((option) => !option.archived),
-      };
-      requestSequenceRef.current += 1;
-      setCard((currentCard) => currentCard ? {
-        ...currentCard,
-        statuses: currentCard.statuses.filter(
-          (status) => status.definitionId !== definitionId
-        ),
-        availableDefinitions: currentCard.availableDefinitions.some(
-          (definition) => definition.id === definitionId
-        )
-          ? currentCard.availableDefinitions
-          : [...currentCard.availableDefinitions, restoredDefinition],
-      } : currentCard);
+      await applyMutationResponse(response, "No se pudo quitar el estado.");
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo quitar el estado.");
       await loadCard(true);
     } finally {
-      setChangingStatusId(null);
+      finishStatusMutation();
     }
   };
 
@@ -262,9 +245,8 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body }),
       });
-      if (!response.ok) throw new Error(await readError(response, "No se pudo guardar la nota."));
+      await applyMutationResponse(response, "No se pudo guardar la nota.");
       setNote("");
-      await loadCard(true);
     } catch (noteError) {
       setError(noteError instanceof Error ? noteError.message : "No se pudo guardar la nota.");
     } finally {
@@ -368,7 +350,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
                       onChange={(event) => void updateStatus(status.definitionId, Number(event.target.value))}
                       className="h-10 w-full min-w-0 bg-background px-3 text-xs outline-none focus:bg-amber-500/10 disabled:opacity-50"
                     >
-                      <option value="" disabled>Seleccionar estado</option>
+                      <option value="" disabled>Asignado — seleccione un valor</option>
                       {status.options.map((option) => (
                         <option key={option.id} value={option.id}>
                           {option.label}{option.archived ? " (retirado)" : ""}
@@ -402,7 +384,8 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
                             key={definition.id}
                             type="button"
                             onClick={() => void addStatus(definition.id)}
-                            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs font-semibold hover:bg-amber-500/10"
+                            disabled={changingStatusId !== null}
+                            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs font-semibold hover:bg-amber-500/10 disabled:opacity-40"
                           >
                             <span>{definition.name}</span>
                             <span className="text-[10px] uppercase tracking-wide text-amber-700">Agregar</span>
@@ -412,6 +395,11 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
                     </div>
                   )}
                 </div>
+              )}
+              {syncWarning && (
+                <p role="status" className="mt-3 border-l-2 border-amber-500 pl-3 text-xs text-amber-700 dark:text-amber-300">
+                  {syncWarning}
+                </p>
               )}
               {error && <p role="alert" className="mt-3 border-l-2 border-red-500 pl-3 text-xs text-red-600">{error}</p>}
             </section>

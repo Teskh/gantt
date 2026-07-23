@@ -1,5 +1,7 @@
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const os = require("os");
 const express = require("express");
 const cors = require("cors");
 const Database = require("better-sqlite3");
@@ -27,6 +29,7 @@ app.use(cors((req, callback) => {
 app.use(express.json());
 
 const dataDir = path.join(__dirname, "..", "data");
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.join(dataDir, "app.db");
@@ -36,6 +39,38 @@ const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 db.pragma("journal_mode = WAL");
 db.pragma("busy_timeout = 5000");
+
+const readGitBuild = () => {
+  try {
+    const gitDir = path.join(__dirname, "..", "..", ".git");
+    const head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
+    if (/^[a-f0-9]{40}$/i.test(head)) return head.slice(0, 12);
+    const ref = head.match(/^ref: ([A-Za-z0-9._/-]+)$/)?.[1];
+    if (!ref || ref.includes("..")) return null;
+    const commit = fs.readFileSync(path.join(gitDir, ref), "utf8").trim();
+    return /^[a-f0-9]{40}$/i.test(commit) ? commit.slice(0, 12) : null;
+  } catch {
+    return null;
+  }
+};
+
+const appBuild = process.env.APP_BUILD || process.env.GIT_COMMIT || readGitBuild() || "unknown";
+const appInstance = process.env.APP_INSTANCE || `${os.hostname()}:${process.pid}`;
+const databaseId = crypto
+  .createHash("sha256")
+  .update(fs.realpathSync(dbPath))
+  .digest("hex")
+  .slice(0, 12);
+
+app.use("/api", (_req, res, next) => {
+  res.set({
+    "Cache-Control": "private, no-store, max-age=0",
+    "X-App-Build": appBuild,
+    "X-App-Instance": appInstance,
+    "X-Database-Id": databaseId,
+  });
+  next();
+});
 
 const parseMonthString = (value) => {
   if (typeof value !== "string") return null;
@@ -343,6 +378,22 @@ const auth = createAuth(db);
 auth.registerPublicRoutes(app);
 app.use("/api", auth.requireAuth);
 
+const readFrontendAsset = () => {
+  try {
+    const html = fs.readFileSync(path.join(frontendDist, "index.html"), "utf8");
+    return html.match(/\bassets\/([^"'?]+\.js)/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+app.get("/api/version", (_req, res) => {
+  res.json({
+    build: appBuild,
+    frontendAsset: readFrontendAsset(),
+  });
+});
+
 app.get("/api/audit-logs", (req, res) => {
   if (req.user.email.toLowerCase() !== ACTIVITY_VIEWER_EMAIL) {
     return res.status(403).json({ error: "Activity log access denied" });
@@ -456,6 +507,11 @@ const readProjectCard = (projectId) => {
     activity,
   };
 };
+
+const mutationResultWithCard = (projectId, result) => ({
+  ...result,
+  card: readProjectCard(projectId),
+});
 
 const validateStatusDefinitionPayload = (body) => {
   const name = normalizeName(body?.name);
@@ -1147,6 +1203,10 @@ app.post("/api/projects/:id/statuses", (req, res) => {
     SELECT * FROM status_definitions WHERE id = ? AND archived_at IS NULL
   `).get(definitionId);
   if (!definition) return res.status(400).json({ error: "Invalid status definition" });
+  const existingStatus = readAssignedStatus(project.base_project_id, definitionId);
+  if (existingStatus) {
+    return res.json(mutationResultWithCard(project.id, existingStatus));
+  }
   try {
     const assignStatus = db.transaction(() => {
       const timestamp = new Date().toISOString();
@@ -1172,10 +1232,12 @@ app.post("/api/projects/:id/statuses", (req, res) => {
       });
     });
     assignStatus();
-    res.status(201).json(readAssignedStatus(project.base_project_id, definitionId));
+    const status = readAssignedStatus(project.base_project_id, definitionId);
+    res.status(201).json(mutationResultWithCard(project.id, status));
   } catch (error) {
     if (String(error?.code || "").startsWith("SQLITE_CONSTRAINT")) {
-      return res.status(409).json({ error: "This status is already assigned" });
+      const status = readAssignedStatus(project.base_project_id, definitionId);
+      if (status) return res.json(mutationResultWithCard(project.id, status));
     }
     console.error(error);
     res.status(500).json({ error: "Unable to assign status" });
@@ -1202,7 +1264,10 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
     WHERE id = ? AND definition_id = ? AND archived_at IS NULL
   `).get(optionId, definitionId);
   if (!option) return res.status(400).json({ error: "Invalid status option" });
-  if (current.option_id === optionId) return res.json(readAssignedStatus(project.base_project_id, definitionId));
+  if (current.option_id === optionId) {
+    const status = readAssignedStatus(project.base_project_id, definitionId);
+    return res.json(mutationResultWithCard(project.id, status));
+  }
 
   const updateStatus = db.transaction(() => {
     const timestamp = new Date().toISOString();
@@ -1260,7 +1325,8 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  res.json(readAssignedStatus(project.base_project_id, definitionId));
+  const status = readAssignedStatus(project.base_project_id, definitionId);
+  res.json(mutationResultWithCard(project.id, status));
 });
 
 app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
@@ -1318,7 +1384,7 @@ app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  res.json({ definitionId });
+  res.json(mutationResultWithCard(project.id, { definitionId }));
 });
 
 app.post("/api/projects/:id/notes", (req, res) => {
@@ -1345,7 +1411,8 @@ app.post("/api/projects/:id/notes", (req, res) => {
     });
     return db.prepare("SELECT * FROM project_activity WHERE id = ?").get(inserted.lastInsertRowid);
   });
-  res.status(201).json(mapProjectActivity(createNote()));
+  const activity = mapProjectActivity(createNote());
+  res.status(201).json(mutationResultWithCard(project.id, activity));
 });
 
 // --- Production Rate Points ---
@@ -1443,7 +1510,10 @@ app.put("/api/production-rate-points", (req, res) => {
   }
 });
 
-const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "API route not found" });
+});
+
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {
@@ -1454,6 +1524,7 @@ if (fs.existsSync(frontendDist)) {
 if (require.main === module) {
   app.listen(port, host, () => {
     console.log(`API server listening at http://${host}:${port}`);
+    console.log(`Build ${appBuild}; instance ${appInstance}; database ${dbPath} (${databaseId})`);
   });
 }
 
