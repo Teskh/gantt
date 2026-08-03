@@ -388,6 +388,22 @@ test("unconfigured cross-origin requests do not receive CORS permission", async 
   assert.equal(response.headers.get("access-control-allow-origin"), null);
 });
 
+test("api responses forbid proxy caching", async () => {
+  // The deployment proxies through IIS, whose output cache keys on the URL alone. Without
+  // no-store it serves a pre-write body to the read that follows a write, and can hand one
+  // session's data to another user.
+  const authenticated = await jsonRequest("/api/scenarios");
+  assert.equal(authenticated.headers.get("cache-control"), "no-store");
+
+  const unauthenticated = await fetch(baseUrl + "/api/scenarios");
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthenticated.headers.get("cache-control"), "no-store");
+
+  const card = await jsonRequest("/api/projects/1/card");
+  assert.equal(card.status, 200);
+  assert.equal(card.headers.get("cache-control"), "no-store");
+});
+
 test("logging out does not create activity", async () => {
   const before = db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'auth.logout'").get().count;
   const response = await jsonRequest("/api/auth/logout", { method: "POST" });

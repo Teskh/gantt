@@ -62,10 +62,12 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   backgroundSyncPausedRef.current =
     settingsOpen || statusPickerOpen || savingNote || changingStatusId !== null;
 
-  const loadCard = useCallback(async (silent = false) => {
+  // "background" is the periodic poll, whose failures must stay quiet. A reload that follows a
+  // write reports its failure, otherwise the change looks like it silently did nothing.
+  const loadCard = useCallback(async (mode: "initial" | "refresh" | "background" = "initial") => {
     if (activeProjectId === null) return;
     const requestSequence = ++requestSequenceRef.current;
-    if (!silent) setLoading(true);
+    if (mode === "initial") setLoading(true);
     try {
       const data = await apiFetch<ProjectCardData>(`/api/projects/${activeProjectId}/card`);
       if (
@@ -78,14 +80,14 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
       setError(null);
     } catch {
       if (
-        !silent &&
+        mode !== "background" &&
         requestSequence === requestSequenceRef.current &&
         activeProjectIdRef.current === activeProjectId
       ) {
         setError("No se pudo cargar la ficha del proyecto.");
       }
     } finally {
-      if (!silent && requestSequence === requestSequenceRef.current) setLoading(false);
+      if (mode === "initial" && requestSequence === requestSequenceRef.current) setLoading(false);
     }
   }, [activeProjectId]);
 
@@ -112,7 +114,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
       ) {
         return;
       }
-      void loadCard(true);
+      void loadCard("background");
     }, 10_000);
     return () => {
       requestSequenceRef.current += 1;
@@ -154,7 +156,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         body: JSON.stringify({ definitionId }),
       });
       if (!response.ok) throw new Error(await readError(response, "No se pudo asignar el estado."));
-      await loadCard(true);
+      await loadCard("refresh");
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "No se pudo asignar el estado.");
     } finally {
@@ -174,10 +176,11 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         body: JSON.stringify({ optionId, expectedRevision: current.revision }),
       });
       if (!response.ok) throw new Error(await readError(response, "No se pudo actualizar el estado."));
-      await loadCard(true);
+      await loadCard("refresh");
     } catch (statusError) {
+      // Reload first: a successful reload clears the error, so the write failure is reported last.
+      await loadCard("background");
       setError(statusError instanceof Error ? statusError.message : "No se pudo actualizar el estado.");
-      await loadCard(true);
     } finally {
       setChangingStatusId(null);
     }
@@ -195,10 +198,11 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         body: JSON.stringify({ expectedRevision: current.revision }),
       });
       if (!response.ok) throw new Error(await readError(response, "No se pudo quitar el estado."));
-      await loadCard(true);
+      await loadCard("refresh");
     } catch (statusError) {
+      // Reload first: a successful reload clears the error, so the write failure is reported last.
+      await loadCard("background");
       setError(statusError instanceof Error ? statusError.message : "No se pudo quitar el estado.");
-      await loadCard(true);
     } finally {
       setChangingStatusId(null);
     }
@@ -217,7 +221,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
       });
       if (!response.ok) throw new Error(await readError(response, "No se pudo guardar la nota."));
       setNote("");
-      await loadCard(true);
+      await loadCard("refresh");
     } catch (noteError) {
       setError(noteError instanceof Error ? noteError.message : "No se pudo guardar la nota.");
     } finally {
@@ -434,7 +438,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
       <StatusSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onChanged={() => void loadCard(true)}
+        onChanged={() => void loadCard("refresh")}
       />
     </>
   );

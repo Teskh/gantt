@@ -31,12 +31,26 @@ notes are shared across scenarios. Start date, mute state, display order, and
 production-rate assumptions remain scenario-specific. Shared projects cannot
 be deleted from an individual scenario; mute them instead.
 
+## Reverse proxy caching
+
+Every `/api` response is sent with `Cache-Control: no-store`. API responses are
+session-specific and change on every write, so a proxy that stores them serves
+the pre-write body to the read that follows a write, which makes an edit look
+like it did nothing until the entry expires.
+
+The IIS front end caches proxied GET responses in the http.sys kernel cache for
+60 seconds, keyed by URL alone and without regard to the session cookie, unless
+the response forbids it. Verify a deployment with `netsh http show cachestate`:
+no `/api/...` entry should appear. Keep the header when adding a proxy hop.
+
 ## Microsoft authentication
 
 The backend uses a Microsoft Entra confidential authorization-code flow and
-protects every data API with an HTTP-only server session. Users are admitted
-only when their normalized Microsoft email is listed in `AUTH_ALLOWED_EMAILS`.
-An empty allowlist disables all users.
+protects every data API with an HTTP-only server session. By default, users are
+admitted only when their normalized Microsoft email is listed in
+`AUTH_ALLOWED_EMAILS`; an empty allowlist disables all users. Set
+`AUTH_ALLOW_TENANT_USERS=true` to admit and automatically provision every user
+authenticated by the configured single-tenant Entra application.
 
 1. Register a single-tenant web application in Microsoft Entra ID.
 2. Add delegated Microsoft Graph permission `User.Read`.
@@ -61,7 +75,8 @@ http://localhost:3005/api/auth/microsoft/callback
 
 Production should use its exact public HTTPS origin, for example
 `https://gantt.example.com/api/auth/microsoft/callback`, with
-`AUTH_COOKIE_SECURE=true`. `MICROSOFT_REDIRECT_URI` is recommended in every
+`AUTH_COOKIE_SECURE=true`. When the app is hosted below the origin root, set
+`AUTH_REDIRECT_PATH` to that path, such as `/gantt/`. `MICROSOFT_REDIRECT_URI` is recommended in every
 deployed environment so proxy headers cannot change the OAuth callback.
 
 The app records successful login/logout, the first view of each scenario per

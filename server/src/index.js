@@ -26,6 +26,15 @@ app.use(cors((req, callback) => {
 }));
 app.use(express.json());
 
+// Every API response is session-specific and must never be stored by a proxy. The deployment
+// puts IIS in front of this server, and its output cache keys on the URL alone: without this
+// header it serves the pre-write body to the read that follows a write, and can hand one
+// session's data to another user.
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 const dataDir = path.join(__dirname, "..", "data");
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)

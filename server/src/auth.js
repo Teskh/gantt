@@ -13,6 +13,14 @@ const hashToken = (value) => crypto.createHash("sha256").update(value).digest("h
 
 const firstHeaderValue = (value) => String(value || "").split(",")[0].trim();
 
+const normalizeAuthRedirectPath = (value) => {
+  const path = String(value || "").trim();
+  return path.startsWith("/") && !path.startsWith("//") ? path : "/";
+};
+
+const tenantUserAccessEnabled = () =>
+  String(process.env.AUTH_ALLOW_TENANT_USERS || "").trim().toLowerCase() === "true";
+
 const parseCookies = (req) => {
   const cookies = {};
   String(req.headers.cookie || "").split(";").forEach((part) => {
@@ -134,7 +142,7 @@ const fetchMicrosoftProfile = async (accessToken, fetchImpl = fetch) => {
   };
 };
 
-const initAuthDb = (db) => {
+const initAuthDb = (db, { allowTenantUsers = tenantUserAccessEnabled() } = {}) => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS auth_users (
       email TEXT PRIMARY KEY COLLATE NOCASE,
@@ -163,6 +171,8 @@ const initAuthDb = (db) => {
     DROP TABLE IF EXISTS session_scenario_views;
   `);
 
+  if (allowTenantUsers) return;
+
   const allowedEmails = String(process.env.AUTH_ALLOWED_EMAILS || "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
@@ -179,10 +189,27 @@ const initAuthDb = (db) => {
   syncUsers();
 };
 
+const resolveAuthorizedUser = (db, profile, allowTenantUsers) => {
+  if (allowTenantUsers) {
+    db.prepare(`
+      INSERT INTO auth_users (email, display_name, microsoft_id, is_active, created_at)
+      VALUES (?, ?, ?, 1, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        display_name = excluded.display_name,
+        microsoft_id = excluded.microsoft_id,
+        is_active = 1
+    `).run(profile.email, profile.displayName, profile.microsoftId, nowIso());
+  }
+  return db.prepare("SELECT * FROM auth_users WHERE lower(email) = lower(?) AND is_active = 1")
+    .get(profile.email);
+};
+
 const createAuth = (db, { fetchImpl = fetch } = {}) => {
-  initAuthDb(db);
+  const allowTenantUsers = tenantUserAccessEnabled();
+  initAuthDb(db, { allowTenantUsers });
   const sessionDays = Math.max(1, Number(process.env.AUTH_SESSION_DAYS) || 7);
   const sessionDurationMs = sessionDays * 24 * 60 * 60 * 1000;
+  const authRedirectPath = normalizeAuthRedirectPath(process.env.AUTH_REDIRECT_PATH);
 
   const cleanupExpired = () => {
     const now = nowIso();
@@ -218,7 +245,7 @@ const createAuth = (db, { fetchImpl = fetch } = {}) => {
   };
 
   const redirectError = (res, message) =>
-    res.redirect(303, `/?auth_error=${encodeURIComponent(message)}`);
+    res.redirect(303, `${authRedirectPath}?auth_error=${encodeURIComponent(message)}`);
 
   const registerPublicRoutes = (app) => {
     app.get("/api/auth/config", (req, res) => {
@@ -270,8 +297,7 @@ const createAuth = (db, { fetchImpl = fetch } = {}) => {
       try {
         const accessToken = await exchangeCodeForToken(config, code, fetchImpl);
         const profile = await fetchMicrosoftProfile(accessToken, fetchImpl);
-        const user = db.prepare("SELECT * FROM auth_users WHERE lower(email) = lower(?) AND is_active = 1")
-          .get(profile.email);
+        const user = resolveAuthorizedUser(db, profile, allowTenantUsers);
         if (!user) {
           return redirectError(res, `El correo ${profile.email} no esta habilitado en Gantt.`);
         }
@@ -301,7 +327,7 @@ const createAuth = (db, { fetchImpl = fetch } = {}) => {
         });
         transaction();
         res.cookie(SESSION_COOKIE, sessionId, cookieOptions(req, sessionDurationMs));
-        return res.redirect(303, "/");
+        return res.redirect(303, authRedirectPath);
       } catch (error) {
         console.error("Microsoft authentication failed", error);
         return redirectError(res, error instanceof Error ? error.message : "No se pudo completar el ingreso.");
@@ -329,4 +355,6 @@ module.exports = {
   exchangeCodeForToken,
   fetchMicrosoftProfile,
   initAuthDb,
+  normalizeAuthRedirectPath,
+  resolveAuthorizedUser,
 };

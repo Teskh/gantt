@@ -1,12 +1,55 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
+const Database = require("better-sqlite3");
 
 const {
   buildAuthorizeUrl,
   deriveRedirectUri,
   exchangeCodeForToken,
   fetchMicrosoftProfile,
+  initAuthDb,
+  normalizeAuthRedirectPath,
+  resolveAuthorizedUser,
 } = require("../src/auth");
+
+test("authentication redirect path defaults safely and accepts an application prefix", () => {
+  assert.equal(normalizeAuthRedirectPath(undefined), "/");
+  assert.equal(normalizeAuthRedirectPath("/gantt/"), "/gantt/");
+  assert.equal(normalizeAuthRedirectPath("https://example.com/elsewhere"), "/");
+  assert.equal(normalizeAuthRedirectPath("//example.com/elsewhere"), "/");
+});
+
+test("tenant-wide authentication provisions a Microsoft user automatically", () => {
+  const db = new Database(":memory:");
+  initAuthDb(db, { allowTenantUsers: true });
+  const profile = {
+    email: "planner@example.com",
+    displayName: "Planner One",
+    microsoftId: "microsoft-id",
+  };
+
+  const user = resolveAuthorizedUser(db, profile, true);
+
+  assert.equal(user.email, profile.email);
+  assert.equal(user.display_name, profile.displayName);
+  assert.equal(user.microsoft_id, profile.microsoftId);
+  assert.equal(user.is_active, 1);
+  db.close();
+});
+
+test("allowlist authentication does not provision an unknown Microsoft user", () => {
+  const db = new Database(":memory:");
+  initAuthDb(db, { allowTenantUsers: false });
+
+  const user = resolveAuthorizedUser(db, {
+    email: "unknown@example.com",
+    displayName: "Unknown User",
+    microsoftId: "unknown-id",
+  }, false);
+
+  assert.equal(user, undefined);
+  db.close();
+});
 
 test("authorization URL uses the tenant-specific v2 endpoint and required scopes", () => {
   const url = new URL(buildAuthorizeUrl({
