@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
+  ChevronDown,
   MessageSquareText,
   Pencil,
   Plus,
@@ -9,6 +10,11 @@ import {
   X,
 } from "lucide-react";
 import type { Project } from "@/App";
+import {
+  activityGroupDefinitions,
+  groupProjectActivity,
+  type ActivityGroupKey,
+} from "@/lib/activity-groups";
 import { apiFetch, apiRequest } from "@/lib/api";
 import { readProjectCardMutation } from "@/lib/project-card-mutation";
 import type { ProjectActivityEntry, ProjectCardData } from "@/lib/project-tracking";
@@ -49,6 +55,9 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [statusPickerOpen, setStatusPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandedActivityGroups, setExpandedActivityGroups] = useState<Set<ActivityGroupKey>>(
+    () => new Set(activityGroupDefinitions.map(({ key }) => key))
+  );
   const panelRef = useRef<HTMLElement>(null);
   const requestSequenceRef = useRef(0);
   const statusMutationInFlightRef = useRef(false);
@@ -104,6 +113,7 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
     setCard(null);
     setNote("");
     setStatusPickerOpen(false);
+    setExpandedActivityGroups(new Set(activityGroupDefinitions.map(({ key }) => key)));
     void loadCard();
     const timer = window.setInterval(() => {
       const focusedElement = document.activeElement;
@@ -145,6 +155,10 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
     ) ?? [],
     [assignedStatusIds, card]
   );
+  const activityGroups = useMemo(
+    () => groupProjectActivity(card?.activity ?? []),
+    [card?.activity]
+  );
 
   if (!project) return null;
 
@@ -158,6 +172,18 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   const finishStatusMutation = () => {
     statusMutationInFlightRef.current = false;
     setChangingStatusId(null);
+  };
+
+  const toggleActivityGroup = (groupKey: ActivityGroupKey) => {
+    setExpandedActivityGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
   };
 
   const applyMutationResponse = async (
@@ -441,26 +467,61 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
                   Todavía no hay actividad registrada para este proyecto.
                 </p>
               )}
-              <ol className="relative mt-4 border-l border-border pl-5">
-                {card?.activity.map((entry) => {
-                  const actor = entry.actorName || entry.actorEmail;
-                  const sentence = activitySentence(entry);
-                  return (
-                    <li key={entry.id} className="relative pb-5 last:pb-0">
-                      <span className={`absolute -left-[23px] top-1 h-[5px] w-[5px] ${entry.kind === "note" ? "bg-amber-500" : "bg-muted-foreground"}`} />
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <span className="text-xs font-semibold" title={entry.actorEmail}>{actor}</span>
-                        <time className="text-[10px] tabular-nums text-muted-foreground">{formatActivityTime(entry.occurredAt)}</time>
+              {activityGroups.length > 0 && (
+                <div className="mt-4 border-y border-border">
+                  {activityGroups.map((group, groupIndex) => {
+                    const expanded = expandedActivityGroups.has(group.key);
+                    const contentId = `project-activity-${project.id}-${group.key}`;
+                    return (
+                      <div key={group.key} className={groupIndex > 0 ? "border-t border-border" : ""}>
+                        <button
+                          type="button"
+                          aria-expanded={expanded}
+                          aria-controls={contentId}
+                          onClick={() => toggleActivityGroup(group.key)}
+                          className="flex w-full items-center justify-between gap-3 bg-muted/30 px-3 py-2.5 text-left hover:bg-muted/60"
+                        >
+                          <span className="flex min-w-0 items-baseline gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.14em]">
+                              {group.label}
+                            </span>
+                            <span className="text-[9px] tabular-nums text-muted-foreground">
+                              {group.entries.length} {group.entries.length === 1 ? "registro" : "registros"}
+                            </span>
+                          </span>
+                          <ChevronDown
+                            className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+                          />
+                        </button>
+                        {expanded && (
+                          <div id={contentId} className="border-t border-border px-3 py-4">
+                            <ol className="relative border-l border-border pl-5">
+                              {group.entries.map((entry) => {
+                                const actor = entry.actorName || entry.actorEmail;
+                                const sentence = activitySentence(entry);
+                                return (
+                                  <li key={entry.id} className="relative pb-5 last:pb-0">
+                                    <span className={`absolute -left-[23px] top-1 h-[5px] w-[5px] ${entry.kind === "note" ? "bg-amber-500" : "bg-muted-foreground"}`} />
+                                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                                      <span className="text-xs font-semibold" title={entry.actorEmail}>{actor}</span>
+                                      <time className="text-[10px] tabular-nums text-muted-foreground">{formatActivityTime(entry.occurredAt)}</time>
+                                    </div>
+                                    {entry.kind === "note" ? (
+                                      <p className="mt-2 whitespace-pre-wrap border border-border bg-card px-3 py-3 text-sm leading-6">{entry.body}</p>
+                                    ) : (
+                                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{sentence}</p>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ol>
+                          </div>
+                        )}
                       </div>
-                      {entry.kind === "note" ? (
-                        <p className="mt-2 whitespace-pre-wrap border border-border bg-card px-3 py-3 text-sm leading-6">{entry.body}</p>
-                      ) : (
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">{sentence}</p>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           </div>
         </aside>

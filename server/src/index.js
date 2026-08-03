@@ -593,7 +593,7 @@ app.post("/api/scenarios", (req, res) => {
       entityType: "scenario",
       entityId: scenarioId,
       scenarioId,
-      summary: `${actorName(req)} creó el escenario ${name}`,
+      summary: `Creó el escenario ${name}`,
       details: { name, sourceScenarioId: sourceScenario?.id ?? null },
     });
     return { id: scenarioId, name, revision: 0 };
@@ -621,7 +621,7 @@ app.put("/api/scenarios/:id", (req, res) => {
       entityType: "scenario",
       entityId: id,
       scenarioId: id,
-      summary: `${actorName(req)} renombró el escenario ${existing.name} a ${name}`,
+      summary: `Renombró el escenario ${existing.name} a ${name}`,
       details: { before: { name: existing.name }, after: { name } },
     });
     return mapScenario(scenario);
@@ -687,7 +687,7 @@ app.post("/api/scenarios/:id/copy", (req, res) => {
       entityType: "scenario",
       entityId: newScenarioId,
       scenarioId: newScenarioId,
-      summary: `${actorName(req)} copió el escenario ${scenario.name}`,
+      summary: `Copió el escenario ${scenario.name}`,
       details: { sourceScenarioId: id, sourceName: scenario.name, copyName },
     });
     return { id: newScenarioId, name: copyName, revision: 0 };
@@ -710,7 +710,7 @@ app.delete("/api/scenarios/:id", (req, res) => {
       entityType: "scenario",
       entityId: id,
       scenarioName: scenario.name,
-      summary: `${actorName(req)} eliminó el escenario ${scenario.name}`,
+      summary: `Eliminó el escenario ${scenario.name}`,
       details: { scenarioId: id, name: scenario.name },
     });
     return result;
@@ -758,7 +758,7 @@ app.put("/api/app-settings", (req, res) => {
         action: "settings.range.update",
         entityType: "app_settings",
         entityId: 1,
-        summary: `${actorName(req)} cambió el rango de planificación`,
+        summary: "Cambió el rango de planificación",
         details: {
           before: { rangeStart: previousSettings.range_start, rangeEnd: previousSettings.range_end },
           after: { rangeStart: normalizedStart, rangeEnd: normalizedEnd },
@@ -821,7 +821,7 @@ app.post("/api/status-definitions", (req, res) => {
         action: "status_definition.create",
         entityType: "status_definition",
         entityId: definitionId,
-        summary: `${actorName(req)} creó el estado ${payload.name}`,
+        summary: `Creó el estado ${payload.name}`,
         details: { name: payload.name, options: payload.options.map((option) => option.label) },
       });
       return definitionId;
@@ -891,7 +891,7 @@ app.put("/api/status-definitions/:id", (req, res) => {
         action: "status_definition.update",
         entityType: "status_definition",
         entityId: definitionId,
-        summary: `${actorName(req)} actualizó el estado ${payload.name}`,
+        summary: `Actualizó el estado ${payload.name}`,
         details: { before: { name: existing.name }, after: { name: payload.name } },
       });
     });
@@ -928,7 +928,7 @@ app.delete("/api/status-definitions/:id", (req, res) => {
       action: "status_definition.archive",
       entityType: "status_definition",
       entityId: definitionId,
-      summary: `${actorName(req)} eliminó el estado ${existing.name}`,
+      summary: `Eliminó el estado ${existing.name}`,
       details: { name: existing.name },
     });
   });
@@ -1017,7 +1017,7 @@ app.post("/api/projects", (req, res) => {
       entityType: "project",
       entityId: project.id,
       scenarioId,
-      summary: `${actorName(req)} agregó el proyecto ${project.name}`,
+      summary: `Agregó el proyecto ${project.name}`,
       details: { after: project },
     })
   );
@@ -1100,10 +1100,10 @@ app.put("/api/projects/:id", (req, res) => {
       const muteChanged = project.muted !== beforeProject.muted;
       const action = moved ? "project.move" : muteChanged ? "project.mute" : "project.update";
       const summary = moved
-        ? `${actorName(req)} movió el proyecto ${project.name} de ${formatAuditDay(beforeProject.start)} a ${formatAuditDay(project.start)}`
+        ? `Movió el proyecto ${project.name} de ${formatAuditDay(beforeProject.start)} a ${formatAuditDay(project.start)}`
         : muteChanged
-          ? `${actorName(req)} ${project.muted ? "silenció" : "reactivó"} el proyecto ${project.name}`
-          : `${actorName(req)} actualizó el proyecto ${project.name}`;
+          ? `${project.muted ? "Silenció" : "Reactivó"} el proyecto ${project.name}`
+          : `Actualizó el proyecto ${project.name}`;
       return {
         ...auditBase(req),
         action,
@@ -1123,9 +1123,31 @@ app.delete("/api/projects/:id", (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Project not found" });
-  res.status(405).json({
-    error: "Projects are shared across scenarios. Mute the project in this scenario instead.",
-  });
+  const expectedRevision = requireExpectedRevision(req, res);
+  if (expectedRevision === null) return;
+  const beforeProject = mapProject(existing);
+  const baseProjectId = existing.base_project_id;
+  const result = mutateSharedProjects(
+    existing.scenario_id,
+    expectedRevision,
+    () => {
+      db.prepare("DELETE FROM projects WHERE base_project_id = ?").run(baseProjectId);
+      const deletedBase = db.prepare("DELETE FROM base_projects WHERE id = ?").run(baseProjectId);
+      if (deletedBase.changes === 0) throw new Error("Project base record is missing");
+      return { id, baseProjectId };
+    },
+    () => ({
+      ...auditBase(req),
+      action: "project.delete",
+      entityType: "project",
+      entityId: id,
+      scenarioId: existing.scenario_id,
+      summary: `Eliminó el proyecto ${beforeProject.name} de todos los escenarios`,
+      details: { before: beforeProject, baseProjectId, global: true },
+    })
+  );
+  if (!result) return sendScenarioConflict(res, existing.scenario_id);
+  res.json({ ...result.value, revision: result.revision });
 });
 
 const reorderProject = (req, res, action, updater) => {
@@ -1148,7 +1170,7 @@ const reorderProject = (req, res, action, updater) => {
       entityType: "project",
       entityId: id,
       scenarioId: project.scenario_id,
-      summary: `${actorName(req)} reordenó el proyecto ${project.name} (${action})`,
+      summary: `Reordenó el proyecto ${project.name} (${action})`,
       details: { action, before: beforeProject, after: updatedProject },
     })
   );
@@ -1227,7 +1249,7 @@ app.post("/api/projects/:id/statuses", (req, res) => {
         action: "project.status.assign",
         entityType: "base_project",
         entityId: project.base_project_id,
-        summary: `${actorName(req)} asignó el estado ${definition.name} a ${project.base_name}`,
+        summary: `Asignó el estado ${definition.name} a ${project.base_name}`,
         details: { definitionId, definitionName: definition.name },
       });
     });
@@ -1309,7 +1331,7 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
       action: "project.status.update",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} cambió ${current.definition_name} de ${current.option_label || "Sin estado"} a ${option.label} en ${project.base_name}`,
+      summary: `Cambió ${current.definition_name} de ${current.option_label || "Sin estado"} a ${option.label} en ${project.base_name}`,
       details: {
         activityId: activity.lastInsertRowid,
         definitionId,
@@ -1373,7 +1395,7 @@ app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
       action: "project.status.unassign",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} quitó el estado ${current.definition_name} de ${project.base_name}`,
+      summary: `Quitó el estado ${current.definition_name} de ${project.base_name}`,
       details: { definitionId, definitionName: current.definition_name },
     });
     return true;
@@ -1406,7 +1428,7 @@ app.post("/api/projects/:id/notes", (req, res) => {
       action: "project.note.create",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} agregó una nota a ${project.base_name}`,
+      summary: `Agregó una nota a ${project.base_name}`,
       details: { activityId: inserted.lastInsertRowid },
     });
     return db.prepare("SELECT * FROM project_activity WHERE id = ?").get(inserted.lastInsertRowid);
@@ -1498,7 +1520,7 @@ app.put("/api/production-rate-points", (req, res) => {
         entityType: "production_rate",
         entityId: scenarioId,
         scenarioId,
-        summary: `${actorName(req)} actualizó la capacidad de producción`,
+        summary: "Actualizó la capacidad de producción",
         details: { changes: changedMonths },
       })
     );

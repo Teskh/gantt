@@ -90,9 +90,8 @@ const initAuditDb = (db) => {
       const initialDay = String(details?.before?.start || "").slice(0, 10);
       const newDay = String(details?.after?.start || "").slice(0, 10);
       if (projectName && /^\d{4}-\d{2}-\d{2}$/.test(initialDay) && /^\d{4}-\d{2}-\d{2}$/.test(newDay)) {
-        const actor = row.actor_name || row.actor_email;
         updateMoveSummary.run(
-          `${actor} movió el proyecto ${projectName} de ${initialDay} a ${newDay}`,
+          `Movió el proyecto ${projectName} de ${initialDay} a ${newDay}`,
           row.id
         );
       }
@@ -100,6 +99,28 @@ const initAuditDb = (db) => {
       // Keep malformed historical details readable through their existing summary.
     }
   });
+
+  const historicalLogs = db.prepare(`
+    SELECT id, actor_email, actor_name, summary FROM audit_logs
+  `).all();
+  const updateSummary = db.prepare("UPDATE audit_logs SET summary = ? WHERE id = ?");
+  const stripHistoricalActorNames = db.transaction(() => {
+    historicalLogs.forEach((row) => {
+      const actorLabels = [row.actor_name, row.actor_email]
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => value.trim())
+        .sort((left, right) => right.length - left.length);
+      const prefix = actorLabels.find((label) => row.summary.startsWith(`${label} `));
+      if (!prefix) return;
+      const remainder = row.summary.slice(prefix.length).trimStart();
+      if (!remainder) return;
+      updateSummary.run(
+        remainder[0].toLocaleUpperCase("es") + remainder.slice(1),
+        row.id
+      );
+    });
+  });
+  stripHistoricalActorNames();
 };
 
 const recordAudit = (db, entry) => {

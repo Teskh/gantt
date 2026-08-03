@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, ChevronDown, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import {
+  activityGroupDefinitions,
+  groupActivityEntries,
+  type ActivityGroupKey,
+} from "@/lib/activity-groups";
+import {
+  activitySummaryWithoutActor,
+  actorInitials,
+  formatActivityTimestamp,
+} from "@/lib/activity-log-format";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
 export interface AuditLogEntry {
   id: number;
@@ -118,13 +129,99 @@ const formatRate = (value: number | null) =>
     ? "Sin valor"
     : new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2 }).format(value);
 
+function ActivityEntryRow({ entry }: { entry: AuditLogEntry }) {
+  const rateChanges = entry.action === "production_rate.update"
+    ? readProductionRateChanges(entry.details)
+    : [];
+  const actorLabel = entry.actorName?.trim() || entry.actorEmail;
+
+  return (
+    <li className="grid grid-cols-[112px_minmax(0,1fr)] border-b border-border hover:bg-muted/30">
+      <div className="border-r border-border px-3 py-3">
+        <span className="block whitespace-nowrap text-[9px] font-bold uppercase tracking-[0.1em] text-amber-700 dark:text-amber-500">
+          {actionLabels[entry.action] ?? entry.entityType}
+        </span>
+        <time className="mt-1.5 block whitespace-nowrap text-[9px] leading-4 tabular-nums text-muted-foreground">
+          {formatActivityTimestamp(entry.occurredAt)}
+        </time>
+        <HoverCard openDelay={150} closeDelay={100}>
+          <HoverCardTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Actividad de ${actorLabel}`}
+              className="mt-2 inline-flex h-7 min-w-7 items-center justify-center border border-border bg-muted px-1.5 text-[10px] font-bold tracking-wide text-foreground hover:border-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            >
+              {actorInitials(entry.actorName, entry.actorEmail)}
+            </button>
+          </HoverCardTrigger>
+          <HoverCardContent
+            side="right"
+            align="start"
+            className="z-[80] w-64 rounded-none p-3"
+          >
+            {entry.actorName && (
+              <p className="text-sm font-semibold text-foreground">{entry.actorName}</p>
+            )}
+            <p className={`${entry.actorName ? "mt-1 " : ""}break-all text-xs text-muted-foreground`}>
+              {entry.actorEmail}
+            </p>
+          </HoverCardContent>
+        </HoverCard>
+      </div>
+      <div className="min-w-0 px-3 py-2.5">
+        <p className="text-xs font-medium leading-5 text-foreground">
+          {activitySummaryWithoutActor(entry.summary, entry.actorName, entry.actorEmail)}
+        </p>
+        {rateChanges.length > 0 && (
+          <div className="mt-2 border border-border bg-background">
+            {rateChanges.map((change, index) => (
+              <div
+                key={change.month}
+                className={`grid grid-cols-[minmax(90px,0.8fr)_minmax(0,1.4fr)] gap-x-3 px-2.5 py-1.5 ${index > 0 ? "border-t border-border" : ""}`}
+              >
+                <div className="text-[10px] font-semibold capitalize leading-4 text-foreground">
+                  {formatMonth(change.month)}
+                </div>
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] tabular-nums text-foreground">
+                  <span className="text-muted-foreground">Inicial</span>
+                  <span>{formatRate(change.initialValue)}</span>
+                  <ArrowRight className="h-3 w-3 shrink-0 text-amber-600" />
+                  <span className="text-muted-foreground">Nuevo</span>
+                  <span>{formatRate(change.newValue)}</span>
+                </div>
+                {change.initialActive !== change.newActive && (
+                  <div className="col-span-2 mt-1 flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                    <span>{change.initialActive ? "Activa" : "Inactiva"}</span>
+                    <ArrowRight className="h-2.5 w-2.5 text-amber-600" />
+                    <span>{change.newActive ? "Activa" : "Inactiva"}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {entry.scenarioName && (
+          <div className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+            Escenario: {entry.scenarioName}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
 export function ActivityLog({ open, onClose }: ActivityLogProps) {
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<ActivityGroupKey>>(
+    () => new Set(activityGroupDefinitions.map(({ key }) => key))
+  );
+  const activityGroups = useMemo(() => groupActivityEntries(entries), [entries]);
 
   useEffect(() => {
     if (!open) return;
+    setExpandedGroups(new Set(activityGroupDefinitions.map(({ key }) => key)));
     setLoading(true);
     setError(null);
     apiFetch<AuditLogEntry[]>("/api/audit-logs?limit=150")
@@ -160,61 +257,47 @@ export function ActivityLog({ open, onClose }: ActivityLogProps) {
           {!loading && !error && entries.length === 0 && (
             <p className="px-4 py-5 text-xs text-muted-foreground">Todavia no hay actividad registrada.</p>
           )}
-          <ol>
-            {entries.map((entry) => {
-              const rateChanges = entry.action === "production_rate.update"
-                ? readProductionRateChanges(entry.details)
-                : [];
-              return (
-                <li key={entry.id} className="grid grid-cols-[88px_minmax(0,1fr)] border-b border-border hover:bg-muted/30">
-                  <div className="border-r border-border px-3 py-3">
-                    <span className="block break-words text-[9px] font-bold uppercase tracking-[0.12em] text-amber-700 dark:text-amber-500">
-                      {actionLabels[entry.action] ?? entry.entityType}
-                    </span>
-                    <time className="mt-1.5 block text-[9px] leading-4 tabular-nums text-muted-foreground">
-                      {new Date(entry.occurredAt).toLocaleString("es-CL")}
-                    </time>
-                  </div>
-                  <div className="min-w-0 px-3 py-2.5">
-                    <p className="text-xs font-medium leading-5 text-foreground">{entry.summary}</p>
-                    {rateChanges.length > 0 && (
-                      <div className="mt-2 border border-border bg-background">
-                        {rateChanges.map((change, index) => (
-                          <div
-                            key={change.month}
-                            className={`grid grid-cols-[minmax(90px,0.8fr)_minmax(0,1.4fr)] gap-x-3 px-2.5 py-1.5 ${index > 0 ? "border-t border-border" : ""}`}
-                          >
-                            <div className="text-[10px] font-semibold capitalize leading-4 text-foreground">
-                              {formatMonth(change.month)}
-                            </div>
-                            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] tabular-nums text-foreground">
-                              <span className="text-muted-foreground">Inicial</span>
-                              <span>{formatRate(change.initialValue)}</span>
-                              <ArrowRight className="h-3 w-3 shrink-0 text-amber-600" />
-                              <span className="text-muted-foreground">Nuevo</span>
-                              <span>{formatRate(change.newValue)}</span>
-                            </div>
-                            {change.initialActive !== change.newActive && (
-                              <div className="col-span-2 mt-1 flex items-center gap-1.5 text-[9px] text-muted-foreground">
-                                <span>{change.initialActive ? "Activa" : "Inactiva"}</span>
-                                <ArrowRight className="h-2.5 w-2.5 text-amber-600" />
-                                <span>{change.newActive ? "Activa" : "Inactiva"}</span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] leading-4 text-muted-foreground">
-                      <span title={entry.actorEmail}>{entry.actorName || entry.actorEmail}</span>
-                      {entry.actorName && <span>{entry.actorEmail}</span>}
-                      {entry.scenarioName && <span>Escenario: {entry.scenarioName}</span>}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          {activityGroups.map((group) => (
+            <section key={group.key} aria-labelledby={`activity-group-${group.key}`}>
+              <button
+                type="button"
+                id={`activity-group-${group.key}`}
+                aria-expanded={expandedGroups.has(group.key)}
+                aria-controls={`activity-group-content-${group.key}`}
+                onClick={() => setExpandedGroups((current) => {
+                  const next = new Set(current);
+                  if (next.has(group.key)) next.delete(group.key);
+                  else next.add(group.key);
+                  return next;
+                })}
+                className="sticky top-0 z-10 flex w-full items-center justify-between gap-3 border-y border-border bg-muted/95 px-4 py-2 text-left backdrop-blur hover:bg-muted"
+              >
+                <span className="flex items-baseline gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-foreground">
+                    {group.label}
+                  </span>
+                  <span className="text-[9px] tabular-nums text-muted-foreground">
+                    {group.entries.length} {group.entries.length === 1 ? "registro" : "registros"}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ${
+                    expandedGroups.has(group.key) ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+              {expandedGroups.has(group.key) && (
+                <ol
+                  id={`activity-group-content-${group.key}`}
+                  aria-labelledby={`activity-group-${group.key}`}
+                >
+                  {group.entries.map((entry) => (
+                    <ActivityEntryRow key={entry.id} entry={entry} />
+                  ))}
+                </ol>
+              )}
+            </section>
+          ))}
         </div>
       </aside>
     </div>

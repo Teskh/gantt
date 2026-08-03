@@ -571,6 +571,25 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
+  const handleProjectDelete = (id: number) => {
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
+    apiRequest("/api/projects/" + id, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: scenario.revision }),
+    })
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(scenario.id, result.revision);
+        setProjects((current) => current.filter((project) => project.id !== id));
+        setProjectCardId((current) => current === id ? null : current);
+        setActiveProject((current) => current?.id === id ? null : current);
+      })
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
+  };
+
   const handleProjectChange = (updated: Project) => {
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
@@ -800,6 +819,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
               onProductionRatePointsSave={handleProductionRateSave}
               onProjectOpen={(project) => setProjectCardId(project.id)}
               onProjectEdit={handleEditProject}
+              onProjectDelete={handleProjectDelete}
               onCreateProjectAtDate={handleCreateProjectAtDate}
               onProjectMuteToggle={handleProjectMuteToggle}
               onProjectReorder={handleProjectReorder}

@@ -165,7 +165,8 @@ test("moving a project records the actor and before/after dates", async () => {
   const details = JSON.parse(audit.details_json);
   assert.equal(audit.actor_email, testEmail);
   assert.equal(audit.actor_name, "Test Planner");
-  assert.match(audit.summary, /Test Planner movió el proyecto/);
+  assert.match(audit.summary, /^Movió el proyecto/);
+  assert.doesNotMatch(audit.summary, /Test Planner/);
   assert.match(audit.summary, / a 2030-04-01$/);
   assert.doesNotMatch(audit.summary, /T\d{2}:/);
   assert.equal(details.before.start, project.start);
@@ -189,7 +190,7 @@ test("production capacity audit records the affected month and value change", as
 
   const audit = db.prepare("SELECT * FROM audit_logs WHERE action = 'production_rate.update' ORDER BY id DESC LIMIT 1").get();
   const details = JSON.parse(audit.details_json);
-  assert.match(audit.summary, /actualizó la capacidad de producción/);
+  assert.match(audit.summary, /^Actualizó la capacidad de producción$/);
   assert.deepEqual(details.changes, [{
     month: firstPoint.month,
     initialValue: firstPoint.rate,
@@ -199,7 +200,7 @@ test("production capacity audit records the affected month and value change", as
   }]);
 });
 
-test("project creation is logged and shared projects cannot be deleted", async () => {
+test("project creation, mute, and global deletion are logged", async () => {
   const snapshot = await jsonRequest("/api/scenarios/1/snapshot").then((response) => response.json());
   const createdResponse = await jsonRequest("/api/projects", {
     method: "POST",
@@ -216,17 +217,26 @@ test("project creation is logged and shared projects cannot be deleted", async (
   assert.equal(createdResponse.status, 201);
   const created = await createdResponse.json();
 
-  const deletedResponse = await jsonRequest(`/api/projects/${created.project.id}`, {
-    method: "DELETE",
-    body: JSON.stringify({ expectedRevision: created.revision }),
-  });
-  assert.equal(deletedResponse.status, 405);
-
   const mutedResponse = await jsonRequest(`/api/projects/${created.project.id}`, {
     method: "PUT",
     body: JSON.stringify({ muted: true, expectedRevision: created.revision }),
   });
   assert.equal(mutedResponse.status, 200);
+  const muted = await mutedResponse.json();
+
+  const deletedResponse = await jsonRequest(`/api/projects/${created.project.id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ expectedRevision: muted.revision }),
+  });
+  assert.equal(deletedResponse.status, 200);
+  const deleted = await deletedResponse.json();
+  assert.equal(deleted.id, created.project.id);
+  assert.equal(deleted.baseProjectId, created.project.baseProjectId);
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM projects WHERE base_project_id = ?")
+      .get(created.project.baseProjectId).count,
+    0
+  );
 
   const rows = db.prepare(`
     SELECT action, scenario_name FROM audit_logs
@@ -236,6 +246,7 @@ test("project creation is logged and shared projects cannot be deleted", async (
   assert.deepEqual(rows, [
     { action: "project.create", scenario_name: "Default Scenario" },
     { action: "project.mute", scenario_name: "Default Scenario" },
+    { action: "project.delete", scenario_name: "Default Scenario" },
   ]);
 });
 
@@ -400,6 +411,59 @@ test("project statuses and notes are shared across scenario placements", async (
   const removed = await removedResponse.json();
   assert.equal(removed.definitionId, definition.id);
   assert.equal(removed.card.statuses.length, 0);
+});
+
+test("global project deletion removes every placement and shared activity", async () => {
+  const sourceBefore = await jsonRequest("/api/scenarios/1/snapshot").then((response) => response.json());
+  const copiedBefore = await jsonRequest(`/api/scenarios/${sharedScenarioId}/snapshot`)
+    .then((response) => response.json());
+  const baseProjectId = sharedPrimaryProject.baseProjectId;
+
+  const response = await jsonRequest(`/api/projects/${sharedPrimaryProject.id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ expectedRevision: sourceBefore.scenario.revision }),
+  });
+  assert.equal(response.status, 200);
+  const deleted = await response.json();
+  assert.equal(deleted.baseProjectId, baseProjectId);
+  assert.equal(deleted.revision, sourceBefore.scenario.revision + 1);
+
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM projects WHERE base_project_id = ?")
+      .get(baseProjectId).count,
+    0
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM base_projects WHERE id = ?")
+      .get(baseProjectId).count,
+    0
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM project_statuses WHERE base_project_id = ?")
+      .get(baseProjectId).count,
+    0
+  );
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS count FROM project_activity WHERE base_project_id = ?")
+      .get(baseProjectId).count,
+    0
+  );
+
+  const copiedAfter = await jsonRequest(`/api/scenarios/${sharedScenarioId}/snapshot`)
+    .then((result) => result.json());
+  assert.equal(copiedAfter.scenario.revision, copiedBefore.scenario.revision + 1);
+  assert.equal(
+    copiedAfter.projects.some((project) => project.baseProjectId === baseProjectId),
+    false
+  );
+
+  const audit = db.prepare(`
+    SELECT summary, details_json FROM audit_logs
+    WHERE action = 'project.delete' AND json_extract(details_json, '$.baseProjectId') = ?
+    ORDER BY id DESC LIMIT 1
+  `).get(baseProjectId);
+  assert.match(audit.summary, /de todos los escenarios$/);
+  assert.equal(JSON.parse(audit.details_json).global, true);
 });
 
 test("app settings use the same stale-write protection", async () => {
