@@ -321,7 +321,7 @@ const createAuth = (db, { fetchImpl = fetch } = {}) => {
             action: "auth.login",
             entityType: "session",
             entityId: sessionId,
-            summary: `${profile.displayName} inició sesión con Microsoft`,
+            summary: "Inició sesión con Microsoft",
             details: { microsoftId: profile.microsoftId },
           });
         });

@@ -33,15 +33,19 @@ be deleted from an individual scenario; mute them instead.
 
 ## Reverse proxy caching
 
-Every `/api` response is sent with `Cache-Control: no-store`. API responses are
-session-specific and change on every write, so a proxy that stores them serves
-the pre-write body to the read that follows a write, which makes an edit look
-like it did nothing until the entry expires.
+Every `/api` response is sent with `Cache-Control: private, no-store, max-age=0`.
+API responses are session-specific and change on every write, so a proxy that
+stores them serves the pre-write body to the read that follows a write, which
+makes an edit look like it did nothing until the entry expires.
 
 The IIS front end caches proxied GET responses in the http.sys kernel cache for
 60 seconds, keyed by URL alone and without regard to the session cookie, unless
 the response forbids it. Verify a deployment with `netsh http show cachestate`:
 no `/api/...` entry should appear. Keep the header when adding a proxy hop.
+
+`GET /api/version` and the `X-App-Build`, `X-App-Instance`, and `X-Database-Id`
+response headers identify which build, process, and database answered, which
+tells a stale response apart from one served by an unexpected backend.
 
 ## Microsoft authentication
 

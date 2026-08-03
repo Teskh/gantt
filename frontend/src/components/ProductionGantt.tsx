@@ -21,7 +21,7 @@ import {
   ContextMenuSeparator,
 } from '@/components/ui/context-menu';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
-import { Pencil, PlusCircle, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
+import { Pencil, PlusCircle, Trash2, Volume2, VolumeX, ArrowUp, ArrowDown, ArrowUpToLine, ArrowDownToLine, ArrowUpDown } from 'lucide-react';
 
 interface ProductionGanttProps {
   projects: Project[];
@@ -31,6 +31,7 @@ interface ProductionGanttProps {
   onProductionRatePointsSave?: (points: ProductionRatePoint[]) => void;
   onProjectOpen: (project: Project) => void;
   onProjectEdit: (project: Project) => void;
+  onProjectDelete: (id: number) => void;
   onCreateProjectAtDate: (startDate: Date) => void;
   onProjectMuteToggle: (projectId: number) => void;
   onProjectReorder: (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => void;
@@ -102,6 +103,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   onProductionRatePointsSave,
   onProjectOpen,
   onProjectEdit,
+  onProjectDelete,
   onCreateProjectAtDate,
   onProjectMuteToggle,
   onProjectReorder,
@@ -153,7 +155,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     onProductionRatePointsSave?.(toDailyPoints(points));
   };
 
-  const handleProjectAction = (action: 'add' | 'edit') => {
+  const handleProjectAction = (action: 'add' | 'edit' | 'delete') => {
     if (!isEditingEnabled) {
       setContextMenuProject(null);
       setContextMenuDate(null);
@@ -164,6 +166,12 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       onCreateProjectAtDate(date);
     } else if (action === 'edit' && contextMenuProject) {
       onProjectEdit(contextMenuProject);
+    } else if (action === 'delete' && contextMenuProject) {
+      const confirmed = window.confirm(
+        `¿Eliminar “${contextMenuProject.name}” de todos los escenarios?\n\n` +
+        "También se eliminarán sus estados y notas. Para ocultarlo solamente en este escenario, usa “Silenciar proyecto”."
+      );
+      if (confirmed) onProjectDelete(contextMenuProject.id);
     }
     setContextMenuProject(null);
     setContextMenuDate(null);
@@ -912,6 +920,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                         Silenciar proyecto
                       </>
                     )}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => handleProjectAction('delete')}
+                    variant="destructive"
+                    disabled={!isEditingEnabled}
+                  >
+                    <Trash2 />
+                    Eliminar proyecto
                   </ContextMenuItem>
                 </>
               )}

@@ -59,6 +59,20 @@ interface AppSettings {
   revision: number;
 }
 
+interface AppVersion {
+  build: string;
+  frontendAsset: string | null;
+}
+
+const loadedFrontendAsset = () => {
+  for (const script of Array.from(document.scripts)) {
+    if (!script.src) continue;
+    const asset = new URL(script.src, window.location.href).pathname.split("/").pop();
+    if (asset?.startsWith("index-") && asset.endsWith(".js")) return asset;
+  }
+  return null;
+};
+
 const normalizeProject = (project: SerializedProject): Project => ({
   ...project,
   start: new Date(project.start),
@@ -97,6 +111,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
   const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [availableFrontendAsset, setAvailableFrontendAsset] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const activeScenarioRef = useRef<Scenario | null>(null);
   const settingsRevisionRef = useRef<number | null>(null);
@@ -112,6 +127,44 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const reportSyncError = useCallback((error: unknown, message: string) => {
     console.error(error);
     setSyncError(message);
+  }, []);
+
+  useEffect(() => {
+    const currentAsset = loadedFrontendAsset();
+    if (!currentAsset) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const checkVersion = async () => {
+      if (document.visibilityState !== "visible" || inFlight) return;
+      inFlight = true;
+      try {
+        const version = await apiFetch<AppVersion>("/api/version");
+        if (
+          !cancelled &&
+          version.frontendAsset &&
+          version.frontendAsset !== currentAsset
+        ) {
+          setAvailableFrontendAsset(version.frontendAsset);
+        }
+      } catch (versionError) {
+        console.warn("Unable to check application version", versionError);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void checkVersion();
+    const timer = window.setInterval(checkVersion, 60_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void checkVersion();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, []);
 
   const applySettings = useCallback((data: AppSettings) => {
@@ -518,6 +571,25 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
+  const handleProjectDelete = (id: number) => {
+    const scenario = activeScenarioRef.current;
+    if (!scenario) return;
+    apiRequest("/api/projects/" + id, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: scenario.revision }),
+    })
+      .then((response) => handleScenarioWriteResponse(response, scenario.id))
+      .then((result) => {
+        if (!result) return;
+        updateActiveRevision(scenario.id, result.revision);
+        setProjects((current) => current.filter((project) => project.id !== id));
+        setProjectCardId((current) => current === id ? null : current);
+        setActiveProject((current) => current?.id === id ? null : current);
+      })
+      .catch((error) => handleScenarioWriteFailure(error, scenario.id));
+  };
+
   const handleProjectChange = (updated: Project) => {
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
@@ -707,6 +779,21 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           onOpenActivity={() => setActivityOpen(true)}
           onLogout={onLogout}
         />
+        {availableFrontendAsset && (
+          <div
+            role="status"
+            className="flex items-center justify-between border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-800 dark:text-amber-200"
+          >
+            <span>Hay una nueva versión disponible.</span>
+            <button
+              type="button"
+              className="ml-4 font-semibold underline underline-offset-2"
+              onClick={() => window.location.reload()}
+            >
+              Recargar cuando estés listo
+            </button>
+          </div>
+        )}
         {syncError && (
           <div
             role="alert"
@@ -732,6 +819,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
               onProductionRatePointsSave={handleProductionRateSave}
               onProjectOpen={(project) => setProjectCardId(project.id)}
               onProjectEdit={handleEditProject}
+              onProjectDelete={handleProjectDelete}
               onCreateProjectAtDate={handleCreateProjectAtDate}
               onProjectMuteToggle={handleProjectMuteToggle}
               onProjectReorder={handleProjectReorder}

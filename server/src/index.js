@@ -1,5 +1,7 @@
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const os = require("os");
 const express = require("express");
 const cors = require("cors");
 const Database = require("better-sqlite3");
@@ -26,16 +28,8 @@ app.use(cors((req, callback) => {
 }));
 app.use(express.json());
 
-// Every API response is session-specific and must never be stored by a proxy. The deployment
-// puts IIS in front of this server, and its output cache keys on the URL alone: without this
-// header it serves the pre-write body to the read that follows a write, and can hand one
-// session's data to another user.
-app.use("/api", (_req, res, next) => {
-  res.set("Cache-Control", "no-store");
-  next();
-});
-
 const dataDir = path.join(__dirname, "..", "data");
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.join(dataDir, "app.db");
@@ -45,6 +39,38 @@ const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
 db.pragma("journal_mode = WAL");
 db.pragma("busy_timeout = 5000");
+
+const readGitBuild = () => {
+  try {
+    const gitDir = path.join(__dirname, "..", "..", ".git");
+    const head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
+    if (/^[a-f0-9]{40}$/i.test(head)) return head.slice(0, 12);
+    const ref = head.match(/^ref: ([A-Za-z0-9._/-]+)$/)?.[1];
+    if (!ref || ref.includes("..")) return null;
+    const commit = fs.readFileSync(path.join(gitDir, ref), "utf8").trim();
+    return /^[a-f0-9]{40}$/i.test(commit) ? commit.slice(0, 12) : null;
+  } catch {
+    return null;
+  }
+};
+
+const appBuild = process.env.APP_BUILD || process.env.GIT_COMMIT || readGitBuild() || "unknown";
+const appInstance = process.env.APP_INSTANCE || `${os.hostname()}:${process.pid}`;
+const databaseId = crypto
+  .createHash("sha256")
+  .update(fs.realpathSync(dbPath))
+  .digest("hex")
+  .slice(0, 12);
+
+app.use("/api", (_req, res, next) => {
+  res.set({
+    "Cache-Control": "private, no-store, max-age=0",
+    "X-App-Build": appBuild,
+    "X-App-Instance": appInstance,
+    "X-Database-Id": databaseId,
+  });
+  next();
+});
 
 const parseMonthString = (value) => {
   if (typeof value !== "string") return null;
@@ -352,6 +378,22 @@ const auth = createAuth(db);
 auth.registerPublicRoutes(app);
 app.use("/api", auth.requireAuth);
 
+const readFrontendAsset = () => {
+  try {
+    const html = fs.readFileSync(path.join(frontendDist, "index.html"), "utf8");
+    return html.match(/\bassets\/([^"'?]+\.js)/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+app.get("/api/version", (_req, res) => {
+  res.json({
+    build: appBuild,
+    frontendAsset: readFrontendAsset(),
+  });
+});
+
 app.get("/api/audit-logs", (req, res) => {
   if (req.user.email.toLowerCase() !== ACTIVITY_VIEWER_EMAIL) {
     return res.status(403).json({ error: "Activity log access denied" });
@@ -466,6 +508,11 @@ const readProjectCard = (projectId) => {
   };
 };
 
+const mutationResultWithCard = (projectId, result) => ({
+  ...result,
+  card: readProjectCard(projectId),
+});
+
 const validateStatusDefinitionPayload = (body) => {
   const name = normalizeName(body?.name);
   const rawOptions = Array.isArray(body?.options) ? body.options : [];
@@ -546,7 +593,7 @@ app.post("/api/scenarios", (req, res) => {
       entityType: "scenario",
       entityId: scenarioId,
       scenarioId,
-      summary: `${actorName(req)} creó el escenario ${name}`,
+      summary: `Creó el escenario ${name}`,
       details: { name, sourceScenarioId: sourceScenario?.id ?? null },
     });
     return { id: scenarioId, name, revision: 0 };
@@ -574,7 +621,7 @@ app.put("/api/scenarios/:id", (req, res) => {
       entityType: "scenario",
       entityId: id,
       scenarioId: id,
-      summary: `${actorName(req)} renombró el escenario ${existing.name} a ${name}`,
+      summary: `Renombró el escenario ${existing.name} a ${name}`,
       details: { before: { name: existing.name }, after: { name } },
     });
     return mapScenario(scenario);
@@ -640,7 +687,7 @@ app.post("/api/scenarios/:id/copy", (req, res) => {
       entityType: "scenario",
       entityId: newScenarioId,
       scenarioId: newScenarioId,
-      summary: `${actorName(req)} copió el escenario ${scenario.name}`,
+      summary: `Copió el escenario ${scenario.name}`,
       details: { sourceScenarioId: id, sourceName: scenario.name, copyName },
     });
     return { id: newScenarioId, name: copyName, revision: 0 };
@@ -663,7 +710,7 @@ app.delete("/api/scenarios/:id", (req, res) => {
       entityType: "scenario",
       entityId: id,
       scenarioName: scenario.name,
-      summary: `${actorName(req)} eliminó el escenario ${scenario.name}`,
+      summary: `Eliminó el escenario ${scenario.name}`,
       details: { scenarioId: id, name: scenario.name },
     });
     return result;
@@ -711,7 +758,7 @@ app.put("/api/app-settings", (req, res) => {
         action: "settings.range.update",
         entityType: "app_settings",
         entityId: 1,
-        summary: `${actorName(req)} cambió el rango de planificación`,
+        summary: "Cambió el rango de planificación",
         details: {
           before: { rangeStart: previousSettings.range_start, rangeEnd: previousSettings.range_end },
           after: { rangeStart: normalizedStart, rangeEnd: normalizedEnd },
@@ -774,7 +821,7 @@ app.post("/api/status-definitions", (req, res) => {
         action: "status_definition.create",
         entityType: "status_definition",
         entityId: definitionId,
-        summary: `${actorName(req)} creó el estado ${payload.name}`,
+        summary: `Creó el estado ${payload.name}`,
         details: { name: payload.name, options: payload.options.map((option) => option.label) },
       });
       return definitionId;
@@ -844,7 +891,7 @@ app.put("/api/status-definitions/:id", (req, res) => {
         action: "status_definition.update",
         entityType: "status_definition",
         entityId: definitionId,
-        summary: `${actorName(req)} actualizó el estado ${payload.name}`,
+        summary: `Actualizó el estado ${payload.name}`,
         details: { before: { name: existing.name }, after: { name: payload.name } },
       });
     });
@@ -881,7 +928,7 @@ app.delete("/api/status-definitions/:id", (req, res) => {
       action: "status_definition.archive",
       entityType: "status_definition",
       entityId: definitionId,
-      summary: `${actorName(req)} eliminó el estado ${existing.name}`,
+      summary: `Eliminó el estado ${existing.name}`,
       details: { name: existing.name },
     });
   });
@@ -970,7 +1017,7 @@ app.post("/api/projects", (req, res) => {
       entityType: "project",
       entityId: project.id,
       scenarioId,
-      summary: `${actorName(req)} agregó el proyecto ${project.name}`,
+      summary: `Agregó el proyecto ${project.name}`,
       details: { after: project },
     })
   );
@@ -1053,10 +1100,10 @@ app.put("/api/projects/:id", (req, res) => {
       const muteChanged = project.muted !== beforeProject.muted;
       const action = moved ? "project.move" : muteChanged ? "project.mute" : "project.update";
       const summary = moved
-        ? `${actorName(req)} movió el proyecto ${project.name} de ${formatAuditDay(beforeProject.start)} a ${formatAuditDay(project.start)}`
+        ? `Movió el proyecto ${project.name} de ${formatAuditDay(beforeProject.start)} a ${formatAuditDay(project.start)}`
         : muteChanged
-          ? `${actorName(req)} ${project.muted ? "silenció" : "reactivó"} el proyecto ${project.name}`
-          : `${actorName(req)} actualizó el proyecto ${project.name}`;
+          ? `${project.muted ? "Silenció" : "Reactivó"} el proyecto ${project.name}`
+          : `Actualizó el proyecto ${project.name}`;
       return {
         ...auditBase(req),
         action,
@@ -1076,9 +1123,31 @@ app.delete("/api/projects/:id", (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
   if (!existing) return res.status(404).json({ error: "Project not found" });
-  res.status(405).json({
-    error: "Projects are shared across scenarios. Mute the project in this scenario instead.",
-  });
+  const expectedRevision = requireExpectedRevision(req, res);
+  if (expectedRevision === null) return;
+  const beforeProject = mapProject(existing);
+  const baseProjectId = existing.base_project_id;
+  const result = mutateSharedProjects(
+    existing.scenario_id,
+    expectedRevision,
+    () => {
+      db.prepare("DELETE FROM projects WHERE base_project_id = ?").run(baseProjectId);
+      const deletedBase = db.prepare("DELETE FROM base_projects WHERE id = ?").run(baseProjectId);
+      if (deletedBase.changes === 0) throw new Error("Project base record is missing");
+      return { id, baseProjectId };
+    },
+    () => ({
+      ...auditBase(req),
+      action: "project.delete",
+      entityType: "project",
+      entityId: id,
+      scenarioId: existing.scenario_id,
+      summary: `Eliminó el proyecto ${beforeProject.name} de todos los escenarios`,
+      details: { before: beforeProject, baseProjectId, global: true },
+    })
+  );
+  if (!result) return sendScenarioConflict(res, existing.scenario_id);
+  res.json({ ...result.value, revision: result.revision });
 });
 
 const reorderProject = (req, res, action, updater) => {
@@ -1101,7 +1170,7 @@ const reorderProject = (req, res, action, updater) => {
       entityType: "project",
       entityId: id,
       scenarioId: project.scenario_id,
-      summary: `${actorName(req)} reordenó el proyecto ${project.name} (${action})`,
+      summary: `Reordenó el proyecto ${project.name} (${action})`,
       details: { action, before: beforeProject, after: updatedProject },
     })
   );
@@ -1156,6 +1225,10 @@ app.post("/api/projects/:id/statuses", (req, res) => {
     SELECT * FROM status_definitions WHERE id = ? AND archived_at IS NULL
   `).get(definitionId);
   if (!definition) return res.status(400).json({ error: "Invalid status definition" });
+  const existingStatus = readAssignedStatus(project.base_project_id, definitionId);
+  if (existingStatus) {
+    return res.json(mutationResultWithCard(project.id, existingStatus));
+  }
   try {
     const assignStatus = db.transaction(() => {
       const timestamp = new Date().toISOString();
@@ -1176,15 +1249,17 @@ app.post("/api/projects/:id/statuses", (req, res) => {
         action: "project.status.assign",
         entityType: "base_project",
         entityId: project.base_project_id,
-        summary: `${actorName(req)} asignó el estado ${definition.name} a ${project.base_name}`,
+        summary: `Asignó el estado ${definition.name} a ${project.base_name}`,
         details: { definitionId, definitionName: definition.name },
       });
     });
     assignStatus();
-    res.status(201).json(readAssignedStatus(project.base_project_id, definitionId));
+    const status = readAssignedStatus(project.base_project_id, definitionId);
+    res.status(201).json(mutationResultWithCard(project.id, status));
   } catch (error) {
     if (String(error?.code || "").startsWith("SQLITE_CONSTRAINT")) {
-      return res.status(409).json({ error: "This status is already assigned" });
+      const status = readAssignedStatus(project.base_project_id, definitionId);
+      if (status) return res.json(mutationResultWithCard(project.id, status));
     }
     console.error(error);
     res.status(500).json({ error: "Unable to assign status" });
@@ -1211,7 +1286,10 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
     WHERE id = ? AND definition_id = ? AND archived_at IS NULL
   `).get(optionId, definitionId);
   if (!option) return res.status(400).json({ error: "Invalid status option" });
-  if (current.option_id === optionId) return res.json(readAssignedStatus(project.base_project_id, definitionId));
+  if (current.option_id === optionId) {
+    const status = readAssignedStatus(project.base_project_id, definitionId);
+    return res.json(mutationResultWithCard(project.id, status));
+  }
 
   const updateStatus = db.transaction(() => {
     const timestamp = new Date().toISOString();
@@ -1253,7 +1331,7 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
       action: "project.status.update",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} cambió ${current.definition_name} de ${current.option_label || "Sin estado"} a ${option.label} en ${project.base_name}`,
+      summary: `Cambió ${current.definition_name} de ${current.option_label || "Sin estado"} a ${option.label} en ${project.base_name}`,
       details: {
         activityId: activity.lastInsertRowid,
         definitionId,
@@ -1269,7 +1347,8 @@ app.put("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  res.json(readAssignedStatus(project.base_project_id, definitionId));
+  const status = readAssignedStatus(project.base_project_id, definitionId);
+  res.json(mutationResultWithCard(project.id, status));
 });
 
 app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
@@ -1316,7 +1395,7 @@ app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
       action: "project.status.unassign",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} quitó el estado ${current.definition_name} de ${project.base_name}`,
+      summary: `Quitó el estado ${current.definition_name} de ${project.base_name}`,
       details: { definitionId, definitionName: current.definition_name },
     });
     return true;
@@ -1327,7 +1406,7 @@ app.delete("/api/projects/:id/statuses/:definitionId", (req, res) => {
       status: readAssignedStatus(project.base_project_id, definitionId),
     });
   }
-  res.json({ definitionId });
+  res.json(mutationResultWithCard(project.id, { definitionId }));
 });
 
 app.post("/api/projects/:id/notes", (req, res) => {
@@ -1349,12 +1428,13 @@ app.post("/api/projects/:id/notes", (req, res) => {
       action: "project.note.create",
       entityType: "base_project",
       entityId: project.base_project_id,
-      summary: `${actorName(req)} agregó una nota a ${project.base_name}`,
+      summary: `Agregó una nota a ${project.base_name}`,
       details: { activityId: inserted.lastInsertRowid },
     });
     return db.prepare("SELECT * FROM project_activity WHERE id = ?").get(inserted.lastInsertRowid);
   });
-  res.status(201).json(mapProjectActivity(createNote()));
+  const activity = mapProjectActivity(createNote());
+  res.status(201).json(mutationResultWithCard(project.id, activity));
 });
 
 // --- Production Rate Points ---
@@ -1440,7 +1520,7 @@ app.put("/api/production-rate-points", (req, res) => {
         entityType: "production_rate",
         entityId: scenarioId,
         scenarioId,
-        summary: `${actorName(req)} actualizó la capacidad de producción`,
+        summary: "Actualizó la capacidad de producción",
         details: { changes: changedMonths },
       })
     );
@@ -1452,7 +1532,10 @@ app.put("/api/production-rate-points", (req, res) => {
   }
 });
 
-const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "API route not found" });
+});
+
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {
@@ -1463,6 +1546,7 @@ if (fs.existsSync(frontendDist)) {
 if (require.main === module) {
   app.listen(port, host, () => {
     console.log(`API server listening at http://${host}:${port}`);
+    console.log(`Build ${appBuild}; instance ${appInstance}; database ${dbPath} (${databaseId})`);
   });
 }
 
