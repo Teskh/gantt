@@ -95,6 +95,34 @@ const MAX_RATE_MAP: Record<RateView, number> = {
   yearly: 35000,
 };
 
+type RateRange = { min: number; max: number };
+type RateRangeOverrides = Partial<Record<RateView, RateRange>>;
+
+const RATE_RANGE_STORAGE_KEY = 'gantt-rate-ranges';
+
+const loadRateRangeOverrides = (): RateRangeOverrides => {
+  try {
+    const raw = localStorage.getItem(RATE_RANGE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as RateRangeOverrides;
+    const result: RateRangeOverrides = {};
+    (['daily', 'weekly', 'monthly', 'yearly'] as const).forEach((view) => {
+      const range = parsed?.[view];
+      if (
+        range &&
+        Number.isFinite(range.min) &&
+        Number.isFinite(range.max) &&
+        range.max > range.min
+      ) {
+        result[view] = { min: range.min, max: range.max };
+      }
+    });
+    return result;
+  } catch {
+    return {};
+  }
+};
+
 export const ProductionGantt: React.FC<ProductionGanttProps> = ({ 
   projects, 
   productionRatePoints, 
@@ -123,6 +151,35 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
 
   /* ---------- Production-rate view (daily / weekly / monthly / yearly) ---------- */
   const [rateView, setRateView] = useState<RateView>('daily');
+  const [rateRangeOverrides, setRateRangeOverrides] = useState<RateRangeOverrides>(
+    () => loadRateRangeOverrides()
+  );
+
+  const rateRange = rateRangeOverrides[rateView] ?? {
+    min: MIN_RATE_MAP[rateView],
+    max: MAX_RATE_MAP[rateView],
+  };
+
+  const persistRateRangeOverrides = (next: RateRangeOverrides) => {
+    setRateRangeOverrides(next);
+    try {
+      localStorage.setItem(RATE_RANGE_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore storage failures (private mode, quota) */
+    }
+  };
+
+  const handleRateRangeChange = (min: number, max: number) => {
+    if (!isEditingEnabled) return;
+    persistRateRangeOverrides({ ...rateRangeOverrides, [rateView]: { min, max } });
+  };
+
+  const handleRateRangeReset = () => {
+    if (!isEditingEnabled) return;
+    const next = { ...rateRangeOverrides };
+    delete next[rateView];
+    persistRateRangeOverrides(next);
+  };
 
   const displayedPoints = useMemo(
     () =>
@@ -321,6 +378,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   const minMonth = useMemo(() => normalizeMonth(minDate), [minDate]);
   const maxMonth = useMemo(() => normalizeMonth(maxDate), [maxDate]);
 
+  const visibleProjects = useMemo(
+    () =>
+      calculatedProjects.filter(
+        (project) => project.start <= maxDate && project.end >= minDate
+      ),
+    [calculatedProjects, minDate, maxDate]
+  );
+
   const totalDays = Math.max(1, Math.round((maxDate.getTime() - minDate.getTime()) / (1000 * 3600 * 24)) + 1);
   const isRangeTooLarge = totalDays > 3650;
 
@@ -441,7 +506,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   // --- Project summary for header hover ---------------------------------------------------------
   const projectSummary = useMemo(() => {
     // Ignore muted projects when calculating the summary
-    const activeProjects = calculatedProjects.filter((p) => !p.muted);
+    const activeProjects = visibleProjects.filter((p) => !p.muted);
     if (activeProjects.length === 0) return null;
 
     const totalProjects = activeProjects.length;
@@ -456,7 +521,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     );
 
     return { totalProjects, aggregateM2, averageGG, earliestStart, latestEnd };
-  }, [calculatedProjects]);
+  }, [visibleProjects]);
 
 
   const rowHeight = 28; // pixels
@@ -563,8 +628,11 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         onPointsSave={handleDisplayedPointsSave}
         minMonth={minMonth}
         maxMonth={maxMonth}
-        minRate={MIN_RATE_MAP[rateView]}
-        maxRate={MAX_RATE_MAP[rateView]}
+        minRate={rateRange.min}
+        maxRate={rateRange.max}
+        isRateRangeCustom={Boolean(rateRangeOverrides[rateView])}
+        onRateRangeChange={handleRateRangeChange}
+        onRateRangeReset={handleRateRangeReset}
         rateView={rateView}
         onRateViewChange={setRateView}
         monthPositions={monthPositions}
@@ -612,7 +680,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {calculatedProjects.map((p) => (
+                  {visibleProjects.map((p) => (
                     <tr key={p.id} className="border-b border-border/50">
                       <td className="px-2 py-1 truncate max-w-[120px]" title={p.name}>
                         {p.name}
@@ -937,7 +1005,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     </div>
   );
 };
-
 
 
 

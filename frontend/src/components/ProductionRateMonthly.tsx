@@ -11,6 +11,9 @@ interface ProductionRateMonthlyProps {
   maxMonth: Date;
   minRate: number;
   maxRate: number;
+  isRateRangeCustom?: boolean;
+  onRateRangeChange?: (min: number, max: number) => void;
+  onRateRangeReset?: () => void;
   rateView: "daily" | "weekly" | "monthly" | "yearly";
   onRateViewChange: (view: "daily" | "weekly" | "monthly" | "yearly") => void;
   monthPositions: Array<{ key: string; date: Date; width: number; x: number }>;
@@ -34,6 +37,9 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   maxMonth,
   minRate,
   maxRate,
+  isRateRangeCustom = false,
+  onRateRangeChange,
+  onRateRangeReset,
   rateView,
   onRateViewChange,
   monthPositions,
@@ -44,6 +50,9 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     () => buildMonthlySeries(points, minMonth, maxMonth),
     [points, minMonth, maxMonth]
   );
+  const [rangeEditorOpen, setRangeEditorOpen] = useState(false);
+  const [rangeDraft, setRangeDraft] = useState({ min: "", max: "" });
+  const [rangeError, setRangeError] = useState<string | null>(null);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -200,8 +209,43 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     }
   }, [series, draggingKey]);
 
+  const canEditRange = isEditingEnabled && Boolean(onRateRangeChange);
+
+  const openRangeEditor = useCallback(() => {
+    if (!canEditRange) return;
+    setRangeDraft({ min: String(Math.round(minRate)), max: String(Math.round(maxRate)) });
+    setRangeError(null);
+    setRangeEditorOpen(true);
+  }, [canEditRange, minRate, maxRate]);
+
+  const submitRangeEditor = useCallback(() => {
+    const min = Number(rangeDraft.min);
+    const max = Number(rangeDraft.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      setRangeError("Ingresa valores numericos.");
+      return;
+    }
+    if (max <= min) {
+      setRangeError("El maximo debe ser mayor que el minimo.");
+      return;
+    }
+    onRateRangeChange?.(min, max);
+    setRangeEditorOpen(false);
+    setRangeError(null);
+  }, [rangeDraft, onRateRangeChange]);
+
+  useEffect(() => {
+    if (!rangeEditorOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRangeEditorOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [rangeEditorOpen]);
+
   useEffect(() => {
     if (isEditingEnabled) return;
+    setRangeEditorOpen(false);
     setDraggingKey(null);
     setHoveredKey(null);
     onInteractionChange?.(false);
@@ -223,13 +267,106 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
       className="relative w-full border-b border-border bg-card"
       style={{ height: `${chartHeight}px` }}
     >
-      <span className="absolute left-3 top-3 z-10 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600">
+      <button
+        type="button"
+        onClick={openRangeEditor}
+        disabled={!canEditRange}
+        title={
+          canEditRange
+            ? "Ajustar el rango del grafico"
+            : undefined
+        }
+        aria-haspopup="dialog"
+        aria-expanded={rangeEditorOpen}
+        className={cn(
+          "absolute left-3 top-3 z-10 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600",
+          canEditRange
+            ? "cursor-pointer transition-colors hover:bg-amber-500/20"
+            : "cursor-default"
+        )}
+      >
         CAPACIDAD DE PRODDUCION [{unitLabel}]
-      </span>
+        {isRateRangeCustom && <span className="ml-1 normal-case">*</span>}
+      </button>
       {!isEditingEnabled && (
         <span className="absolute left-3 top-9 z-10 border border-border bg-background/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
           Edicion bloqueada
         </span>
+      )}
+      {rangeEditorOpen && (
+        <div
+          role="dialog"
+          aria-label="Rango del grafico"
+          className="absolute left-3 top-9 z-20 w-56 border border-border bg-background p-3 shadow-md"
+        >
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            Rango [{unitLabel}]
+          </p>
+          <div className="flex items-center gap-2">
+            <label className="flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Min
+              <input
+                type="number"
+                value={rangeDraft.min}
+                autoFocus
+                onChange={(event) =>
+                  setRangeDraft((draft) => ({ ...draft, min: event.target.value }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") submitRangeEditor();
+                }}
+                className="mt-1 w-full border border-border bg-card px-2 py-1 text-xs font-normal text-foreground"
+              />
+            </label>
+            <label className="flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Max
+              <input
+                type="number"
+                value={rangeDraft.max}
+                onChange={(event) =>
+                  setRangeDraft((draft) => ({ ...draft, max: event.target.value }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") submitRangeEditor();
+                }}
+                className="mt-1 w-full border border-border bg-card px-2 py-1 text-xs font-normal text-foreground"
+              />
+            </label>
+          </div>
+          {rangeError && (
+            <p role="alert" className="mt-2 text-[10px] text-red-600">
+              {rangeError}
+            </p>
+          )}
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onRateRangeReset?.();
+                setRangeEditorOpen(false);
+              }}
+              className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            >
+              Restablecer
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setRangeEditorOpen(false)}
+                className="border border-border px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={submitRangeEditor}
+                className="bg-amber-500 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-950"
+              >
+                Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <nav className="absolute right-3 top-3 z-10 inline-flex items-center gap-px border border-border bg-background text-[10px] font-bold">
         {(["daily", "weekly", "monthly", "yearly"] as const).map((view) => (
