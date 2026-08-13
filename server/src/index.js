@@ -8,6 +8,7 @@ const Database = require("better-sqlite3");
 const { createAuth } = require("./auth");
 const { auditActorFromRequest, initAuditDb, listAuditLogs, recordAudit } = require("./audit");
 const { initializeProjectTracking } = require("./project-tracking");
+const { initializeActivityReads, initializeUserActivityReads, markProjectActivityRead, readUnreadBaseProjectIds } = require("./activity-reads");
 
 const app = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 3005;
@@ -374,7 +375,10 @@ seedDb();
 initializeProjectTracking(db);
 initAuditDb(db);
 
-const auth = createAuth(db);
+const auth = createAuth(db, {
+  initializeUserActivityReads: (email) => initializeUserActivityReads(db, email),
+});
+initializeActivityReads(db);
 auth.registerPublicRoutes(app);
 app.use("/api", auth.requireAuth);
 
@@ -499,8 +503,14 @@ const readProjectCard = (projectId) => {
     ORDER BY occurred_at DESC, id DESC
     LIMIT 150
   `).all(project.base_project_id).map(mapProjectActivity);
+  const latestActivityId = db.prepare(`
+    SELECT COALESCE(MAX(id), 0) AS latest_activity_id
+    FROM project_activity
+    WHERE base_project_id = ?
+  `).get(project.base_project_id).latest_activity_id;
   return {
     projectId: project.id,
+    latestActivityId,
     baseProjectId: project.base_project_id,
     statuses,
     availableDefinitions,
@@ -1210,6 +1220,37 @@ app.post("/api/projects/:id/move-down", (req, res) => {
   });
 });
 
+app.get("/api/project-activity/unread", (req, res) => {
+  const scenarioId = Number(req.query.scenarioId);
+  if (!Number.isInteger(scenarioId) || scenarioId <= 0) {
+    return res.status(400).json({ error: "scenarioId is required" });
+  }
+  res.json({
+    unreadBaseProjectIds: readUnreadBaseProjectIds(db, {
+      userEmail: req.user.email,
+      scenarioId,
+    }),
+  });
+});
+
+app.post("/api/projects/:id/activity-read", (req, res) => {
+  const project = getTrackingProject(Number(req.params.id));
+  if (!project) return res.status(404).json({ error: "Project not found" });
+  const throughActivityId = Number(req.body?.throughActivityId);
+  if (!Number.isInteger(throughActivityId) || throughActivityId < 0) {
+    return res.status(400).json({ error: "throughActivityId is required" });
+  }
+  const result = markProjectActivityRead(db, {
+    userEmail: req.user.email,
+    baseProjectId: project.base_project_id,
+    throughActivityId,
+  });
+  if (!result.ok) return res.status(400).json({ error: result.reason });
+  res.json({
+    baseProjectId: project.base_project_id,
+    lastReadActivityId: result.lastReadActivityId,
+  });
+});
 // --- Shared project card, statuses, and notes ---
 app.get("/api/projects/:id/card", (req, res) => {
   const card = readProjectCard(Number(req.params.id));

@@ -15,15 +15,49 @@
 }
 
 .gantt-no-production-gap {
+  z-index: 1;
+  overflow: visible;
+  pointer-events: auto;
+  border-left: 1px solid var(--gantt-no-production-gap-edge);
+  border-right: 1px solid var(--gantt-no-production-gap-edge);
   background:
     repeating-linear-gradient(
       135deg,
       transparent 0,
-      transparent 7px,
-      var(--gantt-no-production-gap-line) 7px,
-      var(--gantt-no-production-gap-line) 8px
+      transparent 5px,
+      var(--gantt-no-production-gap-line) 5px,
+      var(--gantt-no-production-gap-line) 7px
     ),
     var(--gantt-no-production-gap);
+}
+
+.gantt-no-production-gap-label {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 2;
+  display: inline-flex;
+  transform: translateX(-50%);
+  opacity: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--gantt-no-production-gap-label-border);
+  background: var(--gantt-no-production-gap-label-bg);
+  color: var(--gantt-no-production-gap-label-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 1px 1px 0 var(--gantt-no-production-gap-edge);
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+.gantt-no-production-gap:hover .gantt-no-production-gap-label,
+.gantt-no-production-gap:focus-visible .gantt-no-production-gap-label {
+  opacity: 1;
+  visibility: visible;
 }
 
 .project-bar {

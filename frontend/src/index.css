@@ -87,8 +87,12 @@
   --grid-line: rgba(0, 0, 0, 0.05);
   --gantt-line: #cbd5e1;
   --gantt-line-subtle: rgba(15, 23, 42, 0.04);
-  --gantt-no-production-gap: rgba(245, 158, 11, 0.09);
-  --gantt-no-production-gap-line: rgba(245, 158, 11, 0.18);
+  --gantt-no-production-gap: rgba(217, 119, 6, 0.11);
+  --gantt-no-production-gap-line: rgba(180, 83, 9, 0.24);
+  --gantt-no-production-gap-edge: rgba(146, 64, 14, 0.48);
+  --gantt-no-production-gap-label-bg: #fffbeb;
+  --gantt-no-production-gap-label-border: #b45309;
+  --gantt-no-production-gap-label-text: #78350f;
 }
 
 .dark {
@@ -135,8 +139,12 @@
   --grid-line: rgba(255, 255, 255, 0.05);
   --gantt-line: #334155;
   --gantt-line-subtle: rgba(148, 163, 184, 0.08);
-  --gantt-no-production-gap: rgba(245, 158, 11, 0.13);
-  --gantt-no-production-gap-line: rgba(245, 158, 11, 0.24);
+  --gantt-no-production-gap: rgba(245, 158, 11, 0.16);
+  --gantt-no-production-gap-line: rgba(251, 191, 36, 0.3);
+  --gantt-no-production-gap-edge: rgba(251, 191, 36, 0.6);
+  --gantt-no-production-gap-label-bg: #451a03;
+  --gantt-no-production-gap-label-border: #f59e0b;
+  --gantt-no-production-gap-label-text: #fef3c7;
 }
 
 @layer base {

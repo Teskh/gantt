@@ -413,6 +413,66 @@ test("project statuses and notes are shared across scenario placements", async (
   assert.equal(removed.card.statuses.length, 0);
 });
 
+test("project activity read endpoints expose and advance a shared cursor", async () => {
+  const baseProjectId = sharedPrimaryProject.baseProjectId;
+  const insertActivity = db.prepare(
+    "INSERT INTO project_activity (base_project_id, kind, body, actor_email, actor_name, occurred_at) VALUES (?, 'note', ?, ?, ?, ?)"
+  );
+  const firstActivityId = insertActivity.run(
+    baseProjectId,
+    "External update",
+    activityEmail,
+    "Thomas Schussler",
+    new Date().toISOString()
+  ).lastInsertRowid;
+
+  const cardResponse = await jsonRequest(`/api/projects/${sharedPrimaryProject.id}/card`);
+  assert.equal(cardResponse.status, 200);
+  const card = await cardResponse.json();
+  assert.equal(card.latestActivityId, firstActivityId);
+
+  const unreadResponse = await jsonRequest("/api/project-activity/unread?scenarioId=1");
+  assert.equal(unreadResponse.status, 200);
+  const unread = await unreadResponse.json();
+  assert.deepEqual(unread.unreadBaseProjectIds, [baseProjectId]);
+
+  const markResponse = await jsonRequest(`/api/projects/${sharedPrimaryProject.id}/activity-read`, {
+    method: "POST",
+    body: JSON.stringify({ throughActivityId: firstActivityId }),
+  });
+  assert.equal(markResponse.status, 200);
+  assert.equal((await markResponse.json()).lastReadActivityId, firstActivityId);
+  assert.deepEqual(
+    (await jsonRequest("/api/project-activity/unread?scenarioId=1").then((response) => response.json())).unreadBaseProjectIds,
+    []
+  );
+
+  const secondActivityId = insertActivity.run(
+    baseProjectId,
+    "Another external update",
+    activityEmail,
+    "Thomas Schussler",
+    new Date().toISOString()
+  ).lastInsertRowid;
+  const staleMarkResponse = await jsonRequest(`/api/projects/${sharedPrimaryProject.id}/activity-read`, {
+    method: "POST",
+    body: JSON.stringify({ throughActivityId: firstActivityId }),
+  });
+  assert.equal(staleMarkResponse.status, 200);
+  assert.equal((await staleMarkResponse.json()).lastReadActivityId, firstActivityId);
+  assert.deepEqual(
+    (await jsonRequest("/api/project-activity/unread?scenarioId=1").then((response) => response.json())).unreadBaseProjectIds,
+    [baseProjectId]
+  );
+
+  const finalMarkResponse = await jsonRequest(`/api/projects/${sharedPrimaryProject.id}/activity-read`, {
+    method: "POST",
+    body: JSON.stringify({ throughActivityId: secondActivityId }),
+  });
+  assert.equal(finalMarkResponse.status, 200);
+  assert.equal((await finalMarkResponse.json()).lastReadActivityId, secondActivityId);
+});
+
 test("global project deletion removes every placement and shared activity", async () => {
   const sourceBefore = await jsonRequest("/api/scenarios/1/snapshot").then((response) => response.json());
   const copiedBefore = await jsonRequest(`/api/scenarios/${sharedScenarioId}/snapshot`)

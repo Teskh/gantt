@@ -59,6 +59,10 @@ interface AppSettings {
   revision: number;
 }
 
+interface UnreadProjectActivityResponse {
+  unreadBaseProjectIds: number[];
+}
+
 interface AppVersion {
   build: string;
   frontendAsset: string | null;
@@ -113,6 +117,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [availableFrontendAsset, setAvailableFrontendAsset] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [unreadBaseProjectIds, setUnreadBaseProjectIds] = useState<Set<number>>(() => new Set());
   const activeScenarioRef = useRef<Scenario | null>(null);
   const settingsRevisionRef = useRef<number | null>(null);
 
@@ -129,6 +134,37 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
     setSyncError(message);
   }, []);
 
+  const applyUnreadBaseProjectIds = useCallback((ids: number[]) => {
+    const next = new Set(ids.filter((id) => Number.isInteger(id) && id > 0));
+    setUnreadBaseProjectIds((current) => {
+      if (current.size === next.size && [...next].every((id) => current.has(id))) {
+        return current;
+      }
+      return next;
+    });
+  }, []);
+
+  const handleActivitySeen = useCallback(async (
+    projectId: number,
+    baseProjectId: number,
+    throughActivityId: number,
+  ) => {
+    const response = await apiRequest(`/api/projects/${projectId}/activity-read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ throughActivityId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error ?? "No se pudo marcar la actividad como leída.");
+    }
+    setUnreadBaseProjectIds((current) => {
+      if (!current.has(baseProjectId)) return current;
+      const next = new Set(current);
+      next.delete(baseProjectId);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     const currentAsset = loadedFrontendAsset();
     if (!currentAsset) return;
@@ -282,20 +318,30 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
     if (!activeScenarioId) {
       setProjects([]);
       setProductionRatePoints([]);
+      setUnreadBaseProjectIds(new Set());
       return;
     }
     setPendingSnapshot(null);
     const controller = new AbortController();
-    apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenarioId + "/snapshot", {
-      signal: controller.signal,
-    })
-      .then((snapshot) => applySnapshot(snapshot))
+    Promise.all([
+      apiFetch<ScenarioSnapshot>("/api/scenarios/" + activeScenarioId + "/snapshot", {
+        signal: controller.signal,
+      }),
+      apiFetch<UnreadProjectActivityResponse>(`/api/project-activity/unread?scenarioId=${activeScenarioId}`, {
+        signal: controller.signal,
+      }),
+    ])
+      .then(([snapshot, unread]) => {
+        if (applySnapshot(snapshot)) {
+          applyUnreadBaseProjectIds(unread.unreadBaseProjectIds);
+        }
+      })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
         reportSyncError(error, "No se pudo cargar el escenario seleccionado.");
       });
     return () => controller.abort();
-  }, [activeScenarioId, applySnapshot, reportSyncError]);
+  }, [activeScenarioId, applySnapshot, applyUnreadBaseProjectIds, reportSyncError]);
 
   useEffect(() => {
     if (!activeScenarioId) return;
@@ -306,9 +352,10 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       if (document.visibilityState !== "visible" || inFlight) return;
       inFlight = true;
       try {
-        const [currentScenarios, settings] = await Promise.all([
+        const [currentScenarios, settings, unread] = await Promise.all([
           apiFetch<Scenario[]>("/api/scenarios", { signal: controller.signal }),
           apiFetch<AppSettings>("/api/app-settings", { signal: controller.signal }),
+          apiFetch<UnreadProjectActivityResponse>(`/api/project-activity/unread?scenarioId=${activeScenarioId}`, { signal: controller.signal }),
         ]);
         if (cancelled || activeScenarioRef.current?.id !== activeScenarioId) return;
         setScenarios((current) => {
@@ -329,6 +376,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           return unchanged ? current : merged;
         });
         applySettings(settings);
+        applyUnreadBaseProjectIds(unread.unreadBaseProjectIds);
         const incomingActiveScenario = currentScenarios.find(
           (scenario) => scenario.id === activeScenarioId
         );
@@ -379,7 +427,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [activeScenarioId, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings, reportSyncError]);
+  }, [activeScenarioId, projectModalOpen, isEditingScenarioName, isChartInteracting, applySnapshot, applySettings, applyUnreadBaseProjectIds, reportSyncError]);
 
   useEffect(() => {
     if (activeScenario) {
@@ -813,6 +861,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           {activeScenario ? (
             <ProductionGantt
               projects={projects}
+              unreadBaseProjectIds={unreadBaseProjectIds}
               productionRatePoints={productionRatePoints}
               onProjectUpdate={handleProjectUpdate}
               onProductionRatePointsChange={handleProductionRateUpdate}
@@ -844,6 +893,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           <ProjectActivityCard
             project={projectCardId === null ? null : projects.find((project) => project.id === projectCardId) ?? null}
             onClose={() => setProjectCardId(null)}
+            onActivitySeen={handleActivitySeen}
             onEdit={handleEditProject}
           />
         </main>

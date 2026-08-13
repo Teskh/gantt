@@ -22,6 +22,36 @@ export const sortByMonth = (a: MonthlyRatePoint, b: MonthlyRatePoint): number =>
 export const getActivePoints = (points: MonthlyRatePoint[]): MonthlyRatePoint[] =>
   points.filter((point) => point.isActive).sort(sortByMonth);
 
+const PRODUCTION_DAYS_PER_YEAR = 250;
+const CALENDAR_DAYS_PER_YEAR = 365;
+
+export const getDailyProductionRate = (
+  date: Date,
+  activePoints: MonthlyRatePoint[]
+): number =>
+  Math.max(0, interpolateRate(date, activePoints)) *
+  (PRODUCTION_DAYS_PER_YEAR / CALENDAR_DAYS_PER_YEAR);
+
+export const calculateProductionM2 = (
+  startDate: Date,
+  endDateExclusive: Date,
+  activePoints: MonthlyRatePoint[]
+): number => {
+  const currentDate = new Date(startDate);
+  currentDate.setHours(0, 0, 0, 0);
+
+  const endDate = new Date(endDateExclusive);
+  endDate.setHours(0, 0, 0, 0);
+
+  let totalM2 = 0;
+  while (currentDate.getTime() < endDate.getTime()) {
+    totalM2 += getDailyProductionRate(currentDate, activePoints);
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return totalM2;
+};
+
 export const interpolateRate = (
   date: Date,
   activePoints: MonthlyRatePoint[]

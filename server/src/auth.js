@@ -204,7 +204,10 @@ const resolveAuthorizedUser = (db, profile, allowTenantUsers) => {
     .get(profile.email);
 };
 
-const createAuth = (db, { fetchImpl = fetch } = {}) => {
+const createAuth = (db, {
+  fetchImpl = fetch,
+  initializeUserActivityReads = null,
+} = {}) => {
   const allowTenantUsers = tenantUserAccessEnabled();
   initAuthDb(db, { allowTenantUsers });
   const sessionDays = Math.max(1, Number(process.env.AUTH_SESSION_DAYS) || 7);
@@ -304,12 +307,16 @@ const createAuth = (db, { fetchImpl = fetch } = {}) => {
 
         const sessionId = randomToken();
         const createdAt = nowIso();
+        const firstLogin = !user.last_login_at;
         const transaction = db.transaction(() => {
           db.prepare(`
             UPDATE auth_users
             SET display_name = ?, microsoft_id = ?, last_login_at = ?
             WHERE lower(email) = lower(?)
           `).run(profile.displayName, profile.microsoftId, createdAt, profile.email);
+          if (firstLogin && initializeUserActivityReads) {
+            initializeUserActivityReads(user.email);
+          }
           db.prepare(`
             INSERT INTO auth_sessions (id, user_email, created_at, last_seen_at, expires_at)
             VALUES (?, ?, ?, ?, ?)

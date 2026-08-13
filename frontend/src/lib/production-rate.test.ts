@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { interpolateRate } from "./production-rate";
+import {
+  calculateProductionM2,
+  getDailyProductionRate,
+  interpolateRate,
+} from "./production-rate";
 
 const msPerDay = 24 * 60 * 60 * 1000;
 
@@ -29,5 +33,25 @@ describe("interpolateRate", () => {
 
     expect(interpolateRate(before, [pointA, pointB])).toBe(100);
     expect(interpolateRate(after, [pointA, pointB])).toBe(200);
+  });
+});
+
+describe("production capacity helpers", () => {
+  it("converts the configured annual production factor into a daily rate", () => {
+    const points = [{ month: new Date(2024, 0, 1), rate: 365, isActive: true }];
+
+    expect(getDailyProductionRate(new Date(2024, 0, 1), points)).toBe(250);
+  });
+
+  it("sums the capacity in an exclusive date range", () => {
+    const points = [{ month: new Date(2024, 0, 1), rate: 365, isActive: true }];
+
+    expect(
+      calculateProductionM2(
+        new Date(2024, 0, 1),
+        new Date(2024, 0, 4),
+        points
+      )
+    ).toBe(750);
   });
 });

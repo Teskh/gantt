@@ -43,6 +43,7 @@ export interface ProjectActivityEntry {
 export interface ProjectCardData {
   projectId: number;
   baseProjectId: number;
+  latestActivityId: number;
   statuses: AssignedProjectStatus[];
   availableDefinitions: StatusDefinition[];
   activity: ProjectActivityEntry[];

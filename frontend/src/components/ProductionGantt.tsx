@@ -4,8 +4,9 @@ import { cn } from '@/lib/utils';
 import type { Project, ProductionRatePoint } from '../App';
 import { ProductionRateMonthly } from './ProductionRateMonthly';
 import {
+  calculateProductionM2,
   getActivePoints,
-  interpolateRate,
+  getDailyProductionRate,
   monthKey,
   normalizeMonth,
 } from '@/lib/production-rate';
@@ -25,6 +26,7 @@ import { Pencil, PlusCircle, Trash2, Volume2, VolumeX, ArrowUp, ArrowDown, Arrow
 
 interface ProductionGanttProps {
   projects: Project[];
+  unreadBaseProjectIds: ReadonlySet<number>;
   productionRatePoints: ProductionRatePoint[];
   onProjectUpdate: (projectId: number, newStart: Date) => void;
   onProductionRatePointsChange: (points: ProductionRatePoint[]) => void;
@@ -46,11 +48,6 @@ const addDays = (date: Date, days: number): Date => {
   result.setDate(result.getDate() + days);
   return result;
 };
-
-const getRateForDate = (
-  date: Date,
-  activePoints: ProductionRatePoint[]
-): number => interpolateRate(date, activePoints);
 
 const getReadableTextColor = (hexColor: string): string => {
   const normalized = hexColor.replace('#', '');
@@ -125,6 +122,7 @@ const loadRateRangeOverrides = (): RateRangeOverrides => {
 
 export const ProductionGantt: React.FC<ProductionGanttProps> = ({ 
   projects, 
+  unreadBaseProjectIds,
   productionRatePoints, 
   onProjectUpdate, 
   onProductionRatePointsChange, 
@@ -324,7 +322,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       const activeProjects = processingProjects.filter(p => !p.muted && p.start.getTime() <= currentDate.getTime() && p.remainingM2 > 0);
 
       if (activeProjects.length > 0) {
-        const rateForDay = getRateForDate(currentDate, activeRatePoints) * (250 / 365);
+        const rateForDay = getDailyProductionRate(currentDate, activeRatePoints);
         if (rateForDay <= 0) {
             currentDate = addDays(currentDate, 1);
             continue;
@@ -480,28 +478,31 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
 
     if (activeIntervals.length === 0) return [];
 
-    const gaps: { left: number; width: number }[] = [];
+    const gaps: { left: number; width: number; m2: number }[] = [];
+    const createGap = (startTime: number, endExclusiveTime: number) => ({
+      left: ((startTime - minTime) / dayMs) * dayWidth,
+      width: ((endExclusiveTime - startTime) / dayMs) * dayWidth,
+      m2: calculateProductionM2(
+        new Date(startTime),
+        new Date(endExclusiveTime),
+        activeRatePoints
+      ),
+    });
     let cursor = minTime;
 
     activeIntervals.forEach((interval) => {
       if (interval.start > cursor) {
-        gaps.push({
-          left: ((cursor - minTime) / dayMs) * dayWidth,
-          width: ((interval.start - cursor) / dayMs) * dayWidth,
-        });
+        gaps.push(createGap(cursor, interval.start));
       }
       cursor = Math.max(cursor, interval.end + dayMs);
     });
 
     if (cursor <= maxTime) {
-      gaps.push({
-        left: ((cursor - minTime) / dayMs) * dayWidth,
-        width: (((maxTime - cursor) / dayMs) + 1) * dayWidth,
-      });
+      gaps.push(createGap(cursor, maxTime + dayMs));
     }
 
     return gaps.filter((gap) => gap.width >= 1);
-  }, [calculatedProjects, dayWidth, minDate, maxDate, isRangeTooLarge]);
+  }, [activeRatePoints, calculatedProjects, dayWidth, minDate, maxDate, isRangeTooLarge]);
 
   // --- Project summary for header hover ---------------------------------------------------------
   const projectSummary = useMemo(() => {
@@ -771,17 +772,28 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
             onContextMenu={handleContainerContextMenu}
           >
             <div className="absolute inset-0 pointer-events-none">
-              {noProductionGaps.map((gap, index) => (
-                <div
-                  key={`gap-${index}-${gap.left}`}
-                  className="gantt-no-production-gap absolute top-0 bottom-0"
-                  style={{
-                    left: `${gap.left}px`,
-                    width: `${gap.width}px`,
-                  }}
-                  title="Sin produccion"
-                />
-              ))}
+              {noProductionGaps.map((gap, index) => {
+                const formattedM2 = Math.round(gap.m2).toLocaleString('es-CL');
+                const accessibleLabel = `Sin producción: ${formattedM2} m²`;
+
+                return (
+                  <div
+                    key={`gap-${index}-${gap.left}`}
+                    className="gantt-no-production-gap absolute top-0 bottom-0"
+                    style={{
+                      left: `${gap.left}px`,
+                      width: `${gap.width}px`,
+                    }}
+                    aria-label={accessibleLabel}
+                    role="img"
+                    tabIndex={0}
+                  >
+                    <span className="gantt-no-production-gap-label">
+                      {formattedM2} m²
+                    </span>
+                  </div>
+                );
+              })}
               {monthBoundaries.slice(0, -1).map((position, index) => (
                 <div
                   key={`${position}-${index}`}
@@ -806,11 +818,12 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   const width = Math.max(0, project.duration * dayWidth - 2); // -2 for some horizontal padding
                   const measurement = textMeasurements[project.id];
                   const textFits = measurement?.fits ?? true;
+                  const hasUnreadActivity = unreadBaseProjectIds.has(project.baseProjectId);
 
                   return (
                     <div key={project.id} className="gantt-row grid absolute w-full" style={{ gridTemplateColumns: `1fr`, top: `${index * rowHeight}px`, height: `${rowHeight}px` }}>
                       <div
-                        className="gantt-bars-container relative h-full"
+                        className="gantt-bars-container relative h-full pointer-events-none"
                       >
                         {dragFeedback && dragInfo?.projectId === project.id && (
                           <div className="absolute top-0 bottom-0 z-50 pointer-events-none" style={{ left: `${dragFeedback.left}px` }}>
@@ -825,7 +838,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
                                className={cn(
-                                 'absolute h-[22px] top-1/2 -translate-y-1/2 text-xs select-none',
+                                 'absolute z-[2] h-[22px] top-1/2 -translate-y-1/2 text-xs select-none pointer-events-auto',
                                  { 'opacity-50': project.muted }
                                )}
                                style={{ left: `${left}px`, width: `${width}px` }}
@@ -835,6 +848,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  draggable={isEditingEnabled}
                                  role="button"
                                  tabIndex={0}
+                                 aria-label={`${project.name}${hasUnreadActivity ? ". Actividad nueva." : ""}`}
                                  onClick={() => {
                                    if (suppressProjectClickRef.current) return;
                                    onProjectOpen(project);
@@ -853,7 +867,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                    window.setTimeout(() => { suppressProjectClickRef.current = false; }, 0);
                                  }}
                                  className={cn(
-                                   "h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                   "relative h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
                                     isEditingEnabled ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                                    project.muted
                                      ? "project-bar-muted border-dashed"
@@ -862,6 +876,13 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  style={getProjectBarStyle(project)}
                                  data-project-id={project.id}
                                >
+                                 {hasUnreadActivity && (
+                                   <span
+                                     aria-hidden="true"
+                                     className="pointer-events-none absolute -right-1 -top-1 z-20 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-background"
+                                     title="Actividad nueva"
+                                   />
+                                 )}
                                  {textFits ? (
                                    <span className="truncate px-2 flex items-center justify-center h-full">
                                      {project.name}
@@ -1005,10 +1026,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     </div>
   );
 };
-
-
-
-
 
 
 

@@ -24,6 +24,7 @@ interface ProjectActivityCardProps {
   project: Project | null;
   onClose: () => void;
   onEdit: (project: Project) => void;
+  onActivitySeen: (projectId: number, baseProjectId: number, throughActivityId: number) => Promise<void>;
 }
 
 const formatActivityTime = (value: string) =>
@@ -45,7 +46,7 @@ const activitySentence = (entry: ProjectActivityEntry) => {
 const sameCardData = (current: ProjectCardData | null, incoming: ProjectCardData) =>
   current !== null && JSON.stringify(current) === JSON.stringify(incoming);
 
-export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivityCardProps) {
+export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }: ProjectActivityCardProps) {
   const [card, setCard] = useState<ProjectCardData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,11 +62,15 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
   const panelRef = useRef<HTMLElement>(null);
   const requestSequenceRef = useRef(0);
   const statusMutationInFlightRef = useRef(false);
+  const activeBaseProjectId = project?.baseProjectId ?? null;
+  const activeBaseProjectIdRef = useRef(activeBaseProjectId);
   const activeProjectId = project?.id ?? null;
   const activeProjectIdRef = useRef(activeProjectId);
   const backgroundSyncPausedRef = useRef(false);
+  const lastMarkedActivityIdRef = useRef(0);
 
   activeProjectIdRef.current = activeProjectId;
+  activeBaseProjectIdRef.current = activeBaseProjectId;
   backgroundSyncPausedRef.current =
     settingsOpen || statusPickerOpen || savingNote || changingStatusId !== null;
 
@@ -82,6 +87,26 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
         return;
       }
       setCard((current) => sameCardData(current, data) ? current : data);
+      if (
+        onActivitySeen &&
+        activeBaseProjectId !== null &&
+        data.latestActivityId > lastMarkedActivityIdRef.current
+      ) {
+        try {
+          await onActivitySeen(activeProjectId, activeBaseProjectId, data.latestActivityId);
+          if (
+            activeProjectIdRef.current === activeProjectId &&
+            activeBaseProjectIdRef.current === activeBaseProjectId
+          ) {
+            lastMarkedActivityIdRef.current = Math.max(
+              lastMarkedActivityIdRef.current,
+              data.latestActivityId
+            );
+          }
+        } catch (markError) {
+          console.warn("Unable to mark project activity as read", markError);
+        }
+      }
       if (!silent) setError(null);
       setSyncWarning(null);
     } catch (loadError) {
@@ -102,15 +127,17 @@ export function ProjectActivityCard({ project, onClose, onEdit }: ProjectActivit
     } finally {
       if (!silent && requestSequence === requestSequenceRef.current) setLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeBaseProjectId, activeProjectId, onActivitySeen]);
 
   useEffect(() => {
     if (activeProjectId === null) {
       requestSequenceRef.current += 1;
       setCard(null);
+      lastMarkedActivityIdRef.current = 0;
       return;
     }
     setCard(null);
+    lastMarkedActivityIdRef.current = 0;
     setNote("");
     setStatusPickerOpen(false);
     setExpandedActivityGroups(new Set(activityGroupDefinitions.map(({ key }) => key)));
