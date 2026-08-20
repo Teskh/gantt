@@ -87,6 +87,9 @@
   --grid-line: rgba(0, 0, 0, 0.05);
   --gantt-line: #cbd5e1;
   --gantt-line-subtle: rgba(15, 23, 42, 0.04);
+  --gantt-milestone: #d97706;
+  --gantt-milestone-line: rgba(217, 119, 6, 0.22);
+  --gantt-milestone-line-now: rgba(217, 119, 6, 0.55);
   --gantt-no-production-gap: rgba(217, 119, 6, 0.11);
   --gantt-no-production-gap-line: rgba(180, 83, 9, 0.24);
   --gantt-no-production-gap-edge: rgba(146, 64, 14, 0.48);
@@ -139,6 +142,9 @@
   --grid-line: rgba(255, 255, 255, 0.05);
   --gantt-line: #334155;
   --gantt-line-subtle: rgba(148, 163, 184, 0.08);
+  --gantt-milestone: #ffb800;
+  --gantt-milestone-line: rgba(255, 184, 0, 0.24);
+  --gantt-milestone-line-now: rgba(255, 184, 0, 0.62);
   --gantt-no-production-gap: rgba(245, 158, 11, 0.16);
   --gantt-no-production-gap-line: rgba(251, 191, 36, 0.3);
   --gantt-no-production-gap-edge: rgba(251, 191, 36, 0.6);

@@ -49,6 +49,13 @@ const addDays = (date: Date, days: number): Date => {
   return result;
 };
 
+const getRoundedMonthAhead = (date: Date, monthsAhead: number): Date =>
+  new Date(
+    date.getFullYear(),
+    date.getMonth() + monthsAhead + (date.getDate() > 1 ? 1 : 0),
+    1
+  );
+
 const getReadableTextColor = (hexColor: string): string => {
   const normalized = hexColor.replace('#', '');
   const red = parseInt(normalized.slice(0, 2), 16);
@@ -461,6 +468,42 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     return boundaries;
   }, [monthHeaders]);
 
+  const timelineMilestones = useMemo(() => {
+    if (dayWidth <= 0 || isRangeTooLarge) return [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayMs = 1000 * 3600 * 24;
+    const futureMilestones = [6, 12, 18].map((monthsAhead) => ({
+      key: `${monthsAhead}-months`,
+      label: `${monthsAhead}M`,
+      description: `${monthsAhead} meses`,
+      date: getRoundedMonthAhead(today, monthsAhead),
+      isNow: false,
+    }));
+
+    return [
+      {
+        key: 'now',
+        label: 'AHORA',
+        description: 'Ahora',
+        date: today,
+        isNow: true,
+      },
+      ...futureMilestones,
+    ]
+      .filter(({ date }) => date >= minDate && date <= maxDate)
+      .map((milestone) => ({
+        ...milestone,
+        left: ((milestone.date.getTime() - minDate.getTime()) / dayMs) * dayWidth,
+        formattedDate: milestone.date.toLocaleDateString('es-CL', {
+          day: milestone.isNow ? 'numeric' : undefined,
+          month: 'short',
+          year: 'numeric',
+        }),
+      }));
+  }, [dayWidth, isRangeTooLarge, minDate, maxDate]);
+
   const noProductionGaps = useMemo(() => {
     if (isRangeTooLarge || dayWidth <= 0 || calculatedProjects.length === 0) return [];
 
@@ -644,7 +687,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       <HoverCard>
         <HoverCardTrigger asChild>
           <div
-            className="gantt-header grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
+            className="gantt-header relative grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
             style={{
               gridTemplateColumns: `${monthHeaders
                 .map((m) => `${m.width}px`)
@@ -656,13 +699,28 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
               return (
                 <div
                   key={date.toISOString()}
-                  className="flex items-center justify-center border-r border-border/60 py-2 px-1 text-center"
+                  className="flex items-start justify-center border-r border-border/60 px-1 pb-4 pt-1.5 text-center"
                 >
                   {monthAbbr[date.getMonth()]}
                   {showYear && ` ${date.getFullYear()}`}
                 </div>
               );
             })}
+            {timelineMilestones.map((milestone) => (
+              <div
+                key={milestone.key}
+                className={cn(
+                  'gantt-milestone-header absolute inset-y-0 pointer-events-none',
+                  milestone.isNow && 'gantt-milestone-header-now'
+                )}
+                style={{ left: `${milestone.left}px` }}
+                role="img"
+                aria-label={`${milestone.description}: ${milestone.formattedDate}`}
+                title={`${milestone.description} · ${milestone.formattedDate}`}
+              >
+                <span>{milestone.label}</span>
+              </div>
+            ))}
           </div>
         </HoverCardTrigger>
         <HoverCardContent className="w-[800px] max-h-none overflow-visible bg-popover text-popover-foreground z-40 rounded-none" side="top" align="center" sideOffset={10}>
@@ -802,6 +860,17 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                     left: `${position}px`,
                     backgroundColor: "var(--gantt-line-subtle)",
                   }}
+                />
+              ))}
+              {timelineMilestones.map((milestone) => (
+                <div
+                  key={milestone.key}
+                  className={cn(
+                    'gantt-milestone-line absolute top-0 bottom-0',
+                    milestone.isNow && 'gantt-milestone-line-now'
+                  )}
+                  style={{ left: `${milestone.left}px` }}
+                  aria-hidden="true"
                 />
               ))}
             </div>
