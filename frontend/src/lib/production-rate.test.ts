@@ -3,6 +3,9 @@ import {
   calculateProductionM2,
   getDailyProductionRate,
   interpolateRate,
+  mergeMonthlySeries,
+  monthKey,
+  parseMonthValue,
 } from "./production-rate";
 
 const msPerDay = 24 * 60 * 60 * 1000;
@@ -53,5 +56,40 @@ describe("production capacity helpers", () => {
         points
       )
     ).toBe(750);
+  });
+});
+
+describe("mergeMonthlySeries", () => {
+  it("keeps points outside the edited months and replaces the edited ones", () => {
+    const points = [
+      { month: new Date(2024, 0, 1), rate: 50, isActive: true },
+      { month: new Date(2024, 5, 1), rate: 60, isActive: true },
+      { month: new Date(2025, 0, 1), rate: 90, isActive: true },
+    ];
+    const edited = [
+      { month: new Date(2024, 5, 1), rate: 70, isActive: true },
+      { month: new Date(2024, 6, 1), rate: 65, isActive: false },
+    ];
+
+    expect(mergeMonthlySeries(points, edited)).toEqual([
+      points[0],
+      edited[0],
+      edited[1],
+      points[2],
+    ]);
+  });
+});
+
+describe("parseMonthValue", () => {
+  it("reads a stored month as that local month and round-trips through monthKey", () => {
+    const month = parseMonthValue("2026-09-01");
+    expect(month).toEqual(new Date(2026, 8, 1));
+    expect(monthKey(month!)).toBe("2026-09-01");
+    expect(parseMonthValue("2026-09")).toEqual(new Date(2026, 8, 1));
+  });
+
+  it("rejects malformed months", () => {
+    expect(parseMonthValue("2026-13")).toBeNull();
+    expect(parseMonthValue("garbage")).toBeNull();
   });
 });

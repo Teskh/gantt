@@ -9,6 +9,7 @@ const { createAuth } = require("./auth");
 const { auditActorFromRequest, initAuditDb, listAuditLogs, recordAudit } = require("./audit");
 const { initializeProjectTracking } = require("./project-tracking");
 const { initializeActivityReads, initializeUserActivityReads, markProjectActivityRead, readUnreadBaseProjectIds } = require("./activity-reads");
+const { initializePermissions, registerPermissionRoutes, requireEditorForWrites } = require("./permissions");
 
 const app = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 3005;
@@ -19,7 +20,6 @@ const configuredCorsOrigins = new Set(
     .map((origin) => origin.trim())
     .filter(Boolean)
 );
-const ACTIVITY_VIEWER_EMAIL = "tschussler@grupopatagual.cl";
 
 app.use(cors((req, callback) => {
   const origin = req.get("Origin");
@@ -379,8 +379,11 @@ const auth = createAuth(db, {
   initializeUserActivityReads: (email) => initializeUserActivityReads(db, email),
 });
 initializeActivityReads(db);
+initializePermissions(db);
 auth.registerPublicRoutes(app);
 app.use("/api", auth.requireAuth);
+app.use("/api", requireEditorForWrites);
+registerPermissionRoutes(app, db);
 
 const readFrontendAsset = () => {
   try {
@@ -399,7 +402,7 @@ app.get("/api/version", (_req, res) => {
 });
 
 app.get("/api/audit-logs", (req, res) => {
-  if (req.user.email.toLowerCase() !== ACTIVITY_VIEWER_EMAIL) {
+  if (!req.user.isAdmin) {
     return res.status(403).json({ error: "Activity log access denied" });
   }
   const scenarioId = req.query.scenarioId === undefined ? null : Number(req.query.scenarioId);
@@ -711,6 +714,9 @@ app.delete("/api/scenarios/:id", (req, res) => {
   if (expectedRevision === null) return;
   const scenario = db.prepare("SELECT * FROM scenarios WHERE id = ?").get(id);
   if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+  if (db.prepare("SELECT COUNT(*) AS count FROM scenarios").get().count <= 1) {
+    return res.status(400).json({ error: "The last scenario cannot be deleted" });
+  }
   const deleteScenario = db.transaction(() => {
     const result = db.prepare("DELETE FROM scenarios WHERE id = ? AND revision = ?").run(id, expectedRevision);
     if (result.changes === 0) return result;
@@ -1160,18 +1166,39 @@ app.delete("/api/projects/:id", (req, res) => {
   res.json({ ...result.value, revision: result.revision });
 });
 
-const reorderProject = (req, res, action, updater) => {
+// Moves a project to `targetIndex` within its scenario's order and renumbers every
+// placement 0..n-1, so duplicate display_order values cannot make a move a no-op.
+const moveProjectToIndex = (project, targetIndex) => {
+  const ordered = db
+    .prepare("SELECT id FROM projects WHERE scenario_id = ? ORDER BY display_order ASC, id ASC")
+    .all(project.scenario_id)
+    .map((row) => row.id)
+    .filter((projectId) => projectId !== project.id);
+  const index = Math.max(0, Math.min(ordered.length, targetIndex));
+  ordered.splice(index, 0, project.id);
+  const setOrder = db.prepare("UPDATE projects SET display_order = ? WHERE id = ?");
+  ordered.forEach((projectId, order) => setOrder.run(order, projectId));
+};
+
+const currentProjectIndex = (project) => db
+  .prepare("SELECT id FROM projects WHERE scenario_id = ? ORDER BY display_order ASC, id ASC")
+  .all(project.scenario_id)
+  .findIndex((row) => row.id === project.id);
+
+const reorderProject = (req, res, action, targetIndexFor) => {
   const id = Number(req.params.id);
   const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
   if (!project) return res.status(404).json({ error: "Project not found" });
   const expectedRevision = requireExpectedRevision(req, res);
   if (expectedRevision === null) return;
+  const targetIndex = targetIndexFor(project);
+  if (targetIndex === null) return res.status(400).json({ error: "Invalid target position" });
   const beforeProject = mapProject(project);
   const result = mutateScenario(
     project.scenario_id,
     expectedRevision,
     () => {
-      updater(project);
+      moveProjectToIndex(project, targetIndex);
       return mapProject(db.prepare("SELECT * FROM projects WHERE id = ?").get(id));
     },
     (updatedProject) => ({
@@ -1189,35 +1216,26 @@ const reorderProject = (req, res, action, updater) => {
 };
 
 app.post("/api/projects/:id/move-to-top", (req, res) => {
-  reorderProject(req, res, "al inicio", (project) => {
-    const minOrder = db.prepare("SELECT MIN(display_order) as minOrder FROM projects WHERE scenario_id = ?").get(project.scenario_id).minOrder;
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run((minOrder ?? 0) - 1, project.id);
-  });
+  reorderProject(req, res, "al inicio", () => 0);
 });
 
 app.post("/api/projects/:id/move-to-bottom", (req, res) => {
-  reorderProject(req, res, "al final", (project) => {
-    const maxOrder = db.prepare("SELECT MAX(display_order) as maxOrder FROM projects WHERE scenario_id = ?").get(project.scenario_id).maxOrder;
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run((maxOrder ?? 0) + 1, project.id);
-  });
+  reorderProject(req, res, "al final", () => Number.MAX_SAFE_INTEGER);
 });
 
 app.post("/api/projects/:id/move-up", (req, res) => {
-  reorderProject(req, res, "arriba", (project) => {
-    const previous = db.prepare("SELECT * FROM projects WHERE scenario_id = ? AND display_order < ? ORDER BY display_order DESC LIMIT 1").get(project.scenario_id, project.display_order);
-    if (!previous) return;
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run(previous.display_order, project.id);
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run(project.display_order, previous.id);
-  });
+  reorderProject(req, res, "arriba", (project) => Math.max(0, currentProjectIndex(project) - 1));
 });
 
 app.post("/api/projects/:id/move-down", (req, res) => {
-  reorderProject(req, res, "abajo", (project) => {
-    const next = db.prepare("SELECT * FROM projects WHERE scenario_id = ? AND display_order > ? ORDER BY display_order ASC LIMIT 1").get(project.scenario_id, project.display_order);
-    if (!next) return;
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run(next.display_order, project.id);
-    db.prepare("UPDATE projects SET display_order = ? WHERE id = ?").run(project.display_order, next.id);
-  });
+  reorderProject(req, res, "abajo", (project) => currentProjectIndex(project) + 1);
+});
+
+app.post("/api/projects/:id/move-to", (req, res) => {
+  const targetIndex = req.body?.targetIndex;
+  reorderProject(req, res, "posición " + (Number(targetIndex) + 1), () =>
+    Number.isInteger(targetIndex) && targetIndex >= 0 ? targetIndex : null
+  );
 });
 
 app.get("/api/project-activity/unread", (req, res) => {

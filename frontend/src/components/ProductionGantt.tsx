@@ -7,9 +7,11 @@ import {
   calculateProductionM2,
   getActivePoints,
   getDailyProductionRate,
+  mergeMonthlySeries,
   monthKey,
   normalizeMonth,
 } from '@/lib/production-rate';
+import { compareProjectOrder, moveTargetIndex } from '@/lib/project-order';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -37,10 +39,16 @@ interface ProductionGanttProps {
   onCreateProjectAtDate: (startDate: Date) => void;
   onProjectMuteToggle: (projectId: number) => void;
   onProjectReorder: (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => void;
+  onProjectMoveTo: (projectId: number, targetIndex: number) => void;
   rangeStart: Date;
   rangeEnd: Date;
   isEditingEnabled: boolean;
   onInteractionChange?: (active: boolean) => void;
+  // Phone layout: shows either the Gantt or the capacity chart, full screen.
+  compact?: boolean;
+  compactView?: 'gantt' | 'capacity';
+  // Leaves muted projects out of the rows (the phone view offers this).
+  hideMuted?: boolean;
 }
 
 const addDays = (date: Date, days: number): Date => {
@@ -77,6 +85,27 @@ const getProjectBarStyle = (project: Project): React.CSSProperties => {
 };
 
 type RateView = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+interface BarDrag {
+  projectId: number;
+  pointerId: number;
+  // Plain drag shifts the start date; Ctrl/Cmd + drag moves the row up or down.
+  mode: 'shift' | 'reorder';
+  startX: number;
+  startY: number;
+  dx: number;
+  dy: number;
+  active: boolean;
+}
+
+const DRAG_THRESHOLD_PX = 4;
+const COMPACT_MONTH_WIDTH_PX = 64;
+const DAY_MS = 1000 * 3600 * 24;
+const ROW_HEIGHT = 28; // pixels
+const COMPACT_ROW_HEIGHT = 20;
+
+const reorderSlot = (originIndex: number, dy: number, rowCount: number) =>
+  Math.min(rowCount - 1, Math.max(0, Math.round(originIndex + dy / ROW_HEIGHT)));
 
 const RATE_MULTIPLIERS: Record<RateView, number> = {
   daily: 1,
@@ -140,17 +169,28 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   onCreateProjectAtDate,
   onProjectMuteToggle,
   onProjectReorder,
+  onProjectMoveTo,
   rangeStart,
   rangeEnd,
   isEditingEnabled,
   onInteractionChange,
+  compact: isCompact = false,
+  compactView = 'gantt',
+  hideMuted = false,
 }) => {
+  const rowHeight = isCompact ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
+  const showCapacity = !isCompact || compactView === 'capacity';
+  const showGantt = !isCompact || compactView === 'gantt';
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const monthHeaderRef = useRef<HTMLDivElement>(null);
+  const [compactChartHeight, setCompactChartHeight] = useState(0);
   const [contextMenuProject, setContextMenuProject] = useState<Project | null>(null);
   const [contextMenuDate, setContextMenuDate] = useState<Date | null>(null);
   const ganttChartRef = useRef<HTMLDivElement>(null);
-  const [ganttChartWidth, setGanttChartWidth] = useState(100); // Set reasonable initial width
-  const [dragInfo, setDragInfo] = useState<{ projectId: number; dragOffset: number } | null>(null);
-  const [dragFeedback, setDragFeedback] = useState<{ left: number; date: string } | null>(null);
+  const [ganttChartWidth, setGanttChartWidth] = useState(0); // Measured right after mount
+  const dragRef = useRef<BarDrag | null>(null);
+  const [drag, setDrag] = useState<BarDrag | null>(null);
   const suppressProjectClickRef = useRef(false);
   const [textMeasurements, setTextMeasurements] = useState<{ [projectId: number]: { width: number; fits: boolean } }>({});
 
@@ -175,12 +215,10 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   const handleRateRangeChange = (min: number, max: number) => {
-    if (!isEditingEnabled) return;
     persistRateRangeOverrides({ ...rateRangeOverrides, [rateView]: { min, max } });
   };
 
   const handleRateRangeReset = () => {
-    if (!isEditingEnabled) return;
     const next = { ...rateRangeOverrides };
     delete next[rateView];
     persistRateRangeOverrides(next);
@@ -196,11 +234,19 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     [productionRatePoints, rateView]
   );
 
-  const toDailyPoints = (points: ProductionRatePoint[]) =>
-    points.map((p) => ({
-      ...p,
-      rate: p.rate / RATE_MULTIPLIERS[rateView],
-    }));
+  // The chart only edits the visible months; merge them into the full list so the
+  // save does not delete capacity points outside the visible range. Unedited months
+  // keep their stored rate instead of a scaled-and-unscaled float.
+  const toDailyPoints = (points: ProductionRatePoint[]) => {
+    const multiplier = RATE_MULTIPLIERS[rateView];
+    const storedByMonth = new Map(productionRatePoints.map((p) => [monthKey(p.month), p]));
+    const edited = points.map((p) => {
+      const stored = storedByMonth.get(monthKey(p.month));
+      const rate = stored && stored.rate * multiplier === p.rate ? stored.rate : p.rate / multiplier;
+      return { ...p, rate };
+    });
+    return mergeMonthlySeries(productionRatePoints, edited);
+  };
 
   const activeRatePoints = useMemo(
     () => getActivePoints(productionRatePoints),
@@ -286,7 +332,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   };
 
   useEffect(() => {
-    const element = ganttChartRef.current;
+    const element = timelineRef.current;
     if (!element) return;
 
     // Set initial width immediately
@@ -299,6 +345,20 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
   }, []);
+
+  // The phone capacity view gives the chart all the height the month header leaves.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const header = monthHeaderRef.current;
+    if (!isCompact || !showCapacity || !scroller || !header) return;
+    const measure = () =>
+      setCompactChartHeight(Math.max(140, scroller.clientHeight - header.offsetHeight));
+    measure();
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(scroller);
+    resizeObserver.observe(header);
+    return () => resizeObserver.disconnect();
+  }, [isCompact, showCapacity]);
 
   const calculatedProjects = useMemo(() => {
     if (projects.length === 0 || activeRatePoints.length === 0) return [];
@@ -368,8 +428,13 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         const duration = (p.end.getTime() - p.start.getTime()) / (1000 * 3600 * 24) + 1;
         return { ...p, duration: Math.max(1, Math.round(duration)) }; // Ensure duration is at least 1 day
       })
-      .sort((a, b) => a.displayOrder - b.displayOrder); // Sort by display order
+      .sort(compareProjectOrder);
   }, [projects, activeRatePoints]);
+
+  const rowProjects = useMemo(
+    () => (hideMuted ? calculatedProjects.filter((project) => !project.muted) : calculatedProjects),
+    [calculatedProjects, hideMuted]
+  );
 
   const [minDate, maxDate] = useMemo(() => {
     const start = normalizeMonth(rangeStart);
@@ -391,7 +456,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     [calculatedProjects, minDate, maxDate]
   );
 
-  const totalDays = Math.max(1, Math.round((maxDate.getTime() - minDate.getTime()) / (1000 * 3600 * 24)) + 1);
+  const totalDays = Math.max(1, Math.round((maxDate.getTime() - minDate.getTime()) / DAY_MS) + 1);
+  const monthCount =
+    (maxDate.getFullYear() - minDate.getFullYear()) * 12 + maxDate.getMonth() - minDate.getMonth() + 1;
+  // On phones the Gantt fits the whole range on screen; the capacity chart keeps
+  // readable months and scrolls sideways instead.
+  const minTimelineWidth = isCompact && compactView === 'capacity'
+    ? monthCount * COMPACT_MONTH_WIDTH_PX
+    : undefined;
   const isRangeTooLarge = totalDays > 3650;
 
   const projectColumnWidth = 0;
@@ -568,7 +640,6 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   }, [visibleProjects]);
 
 
-  const rowHeight = 28; // pixels
   const textMeasureRef = useRef<HTMLSpanElement>(null);
 
   // Measure text widths for all projects
@@ -591,82 +662,154 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     });
     
     setTextMeasurements(measurements);
-  }, [calculatedProjects, dayWidth, minDate]);
+  }, [calculatedProjects, dayWidth, minDate, showGantt, isCompact]);
 
-  const handleDragStart = (e: React.DragEvent, projectId: number) => {
-    if (!isEditingEnabled) {
-      e.preventDefault();
+  const projectLeft = (project: { start: Date }) =>
+    ((project.start.getTime() - minDate.getTime()) / DAY_MS) * dayWidth;
+
+  const shiftedDayOffset = (project: { start: Date }, dx: number) =>
+    Math.max(0, Math.round((projectLeft(project) + dx) / dayWidth));
+
+
+  const reorderPreview = useMemo(() => {
+    if (!drag?.active || drag.mode !== 'reorder') return null;
+    const originIndex = calculatedProjects.findIndex((project) => project.id === drag.projectId);
+    if (originIndex < 0) return null;
+    return {
+      projectId: drag.projectId,
+      originIndex,
+      dy: drag.dy,
+      slot: reorderSlot(originIndex, drag.dy, calculatedProjects.length),
+    };
+  }, [drag, calculatedProjects]);
+
+  const rowTop = (projectId: number, index: number) => {
+    if (!reorderPreview) return index * rowHeight;
+    const { originIndex, slot, dy } = reorderPreview;
+    if (projectId === reorderPreview.projectId) return originIndex * rowHeight + dy;
+    const indexWithoutDragged = index < originIndex ? index : index - 1;
+    return (indexWithoutDragged < slot ? indexWithoutDragged : indexWithoutDragged + 1) * rowHeight;
+  };
+
+  const handleBarPointerDown = (event: React.PointerEvent<HTMLDivElement>, projectId: number) => {
+    // Touch keeps tap-to-open and long-press menus; dragging would fight scrolling.
+    if (!isEditingEnabled || event.pointerType !== 'mouse' || event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      projectId,
+      pointerId: event.pointerId,
+      mode: event.ctrlKey || event.metaKey ? 'reorder' : 'shift',
+      startX: event.clientX,
+      startY: event.clientY,
+      dx: 0,
+      dy: 0,
+      active: false,
+    };
+  };
+
+  const handleBarPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    const dx = event.clientX - current.startX;
+    const dy = event.clientY - current.startY;
+    if (!current.active && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    if (!current.active) onInteractionChange?.(true);
+    const next = { ...current, dx, dy, active: true };
+    dragRef.current = next;
+    setDrag(next);
+  };
+
+  const finishBarDrag = (event: React.PointerEvent<HTMLDivElement>, commit: boolean) => {
+    const current = dragRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDrag(null);
+    if (!current.active) return;
+
+    suppressProjectClickRef.current = true;
+    window.setTimeout(() => { suppressProjectClickRef.current = false; }, 0);
+    onInteractionChange?.(false);
+    if (!commit || dayWidth <= 0) return;
+
+    const originIndex = calculatedProjects.findIndex((project) => project.id === current.projectId);
+    const project = calculatedProjects[originIndex];
+    if (!project) return;
+    if (current.mode === 'shift') {
+      const newStart = addDays(minDate, shiftedDayOffset(project, current.dx));
+      if (newStart.getTime() !== project.start.getTime()) onProjectUpdate(project.id, newStart);
       return;
     }
-    suppressProjectClickRef.current = true;
-    const barElement = e.currentTarget as HTMLDivElement;
-    const offset = e.clientX - barElement.getBoundingClientRect().left;
-    e.dataTransfer.setData("application/json", JSON.stringify({ projectId, dragOffset: offset }));
-    e.dataTransfer.effectAllowed = 'move';
-    setDragInfo({ projectId, dragOffset: offset });
-    onInteractionChange?.(true);
+    const targetIndex = moveTargetIndex(
+      projects,
+      calculatedProjects.map((item) => item.id),
+      project.id,
+      reorderSlot(originIndex, current.dy, calculatedProjects.length)
+    );
+    if (targetIndex !== null) onProjectMoveTo(project.id, targetIndex);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    if (!isEditingEnabled) return;
-    e.preventDefault();
-    if (!dragInfo) return;
-
-    const dropContainer = e.currentTarget as HTMLDivElement;
-    const containerLeft = dropContainer.getBoundingClientRect().left;
-    const dropX = e.clientX - containerLeft;
-    const newBarLeft = dropX - dragInfo.dragOffset;
-
-    if (dayWidth <= 0) return;
-
-    const newDayOffset = Math.max(0, Math.round(newBarLeft / dayWidth));
-    const newStartDate = addDays(minDate, newDayOffset);
-
-    setDragFeedback({
-      left: newDayOffset * dayWidth,
-      date: newStartDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-    });
+  const handleBarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, project: Project) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onProjectOpen(project);
+    } else if (isEditingEnabled && event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      onProjectReorder(project.id, event.key === 'ArrowUp' ? 'move-up' : 'move-down');
+    }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    if (!isEditingEnabled) return;
-    e.preventDefault();
-    const data = e.dataTransfer.getData("application/json");
-    if (!data) return;
-
-    const { projectId, dragOffset } = JSON.parse(data);
-
-    if (!projectId) return;
-
-    const dropContainer = e.currentTarget as HTMLDivElement;
-    const containerLeft = dropContainer.getBoundingClientRect().left;
-    const dropX = e.clientX - containerLeft;
-    const newBarLeft = dropX - dragOffset;
-
-    if (dayWidth <= 0) return;
-    
-    const newDayOffset = Math.max(0, Math.round(newBarLeft / dayWidth));
-    const newStartDate = addDays(minDate, newDayOffset);
-
-    onProjectUpdate(projectId, newStartDate);
-    setDragFeedback(null);
-    onInteractionChange?.(false);
+  // Long-press on touch opens the menu without a contextmenu event on iOS, so
+  // remember what was under the finger when it went down.
+  const handleBodyPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse') return;
+    const projectElement = (event.target as HTMLElement).closest('[data-project-id]');
+    const project = projectElement
+      ? calculatedProjects.find((item) => item.id === Number(projectElement.getAttribute('data-project-id')))
+      : undefined;
+    const rect = ganttChartRef.current?.getBoundingClientRect();
+    setContextMenuProject(project ?? null);
+    setContextMenuDate(
+      !project && rect && dayWidth > 0
+        ? addDays(minDate, Math.floor((event.clientX - rect.left) / dayWidth))
+        : null
+    );
   };
 
   useEffect(() => {
-    if (isEditingEnabled) return;
-    setDragInfo(null);
-    setDragFeedback(null);
+    if (isEditingEnabled || !dragRef.current) return;
+    dragRef.current = null;
+    setDrag(null);
     onInteractionChange?.(false);
   }, [isEditingEnabled, onInteractionChange]);
+
+  // On phones, open the timeline at the current month rather than the range start.
+  const autoScrolledRangeRef = useRef<string | null>(null);
+  const nowMilestoneLeft = timelineMilestones.find((milestone) => milestone.isNow)?.left;
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!isCompact || !scroller || dayWidth <= 0) return;
+    const rangeKey = `${compactView}-${minDate.getTime()}-${maxDate.getTime()}`;
+    if (autoScrolledRangeRef.current === rangeKey) return;
+    autoScrolledRangeRef.current = rangeKey;
+    scroller.scrollLeft = nowMilestoneLeft === undefined
+      ? 0
+      : Math.max(0, nowMilestoneLeft - COMPACT_MONTH_WIDTH_PX);
+  }, [isCompact, compactView, dayWidth, minDate, maxDate, nowMilestoneLeft]);
 
   if (isRangeTooLarge) {
     return <div className="p-4 text-center text-red-500">El rango de fechas calculado es demasiado grande para mostrar.</div>;
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <ProductionRateMonthly
+    <div
+      ref={scrollerRef}
+      className={isCompact
+        ? "min-h-0 flex-1 overflow-auto overscroll-contain"
+        : "flex min-h-full flex-col overflow-x-auto overscroll-x-contain"}
+    >
+    <div ref={timelineRef} className="flex min-h-full flex-1 flex-col" style={{ minWidth: minTimelineWidth }}>
+      {showCapacity && <ProductionRateMonthly
         points={displayedPoints}
         onPointsChange={handleDisplayedPointsChange}
         onPointsSave={handleDisplayedPointsSave}
@@ -682,24 +825,53 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         monthPositions={monthPositions}
         isEditingEnabled={isEditingEnabled}
         onInteractionChange={onInteractionChange}
-      />
+        compact={isCompact}
+        height={isCompact ? compactChartHeight : undefined}
+      />}
 
       <HoverCard>
         <HoverCardTrigger asChild>
           <div
-            className="gantt-header relative grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden"
+            ref={monthHeaderRef}
+            className={cn(
+              "gantt-header relative grid w-full min-w-full bg-muted border-b border-border text-[10px] font-bold uppercase tracking-wide text-muted-foreground overflow-hidden",
+              isCompact && showGantt && "sticky top-0 z-20"
+            )}
             style={{
               gridTemplateColumns: `${monthHeaders
                 .map((m) => `${m.width}px`)
                 .join(' ')}`,
             }}
           >
-            {monthHeaders.map(({ date }, index) => {
+            {monthHeaders.map(({ date, width }, index) => {
               const showYear = date.getMonth() === 0 || index === 0;
+              // Narrow months (a whole range on a phone): stack a short year under
+              // the month, and fall back to its initial when even that is too wide.
+              if (width < 40) {
+                return (
+                  <div
+                    key={date.toISOString()}
+                    className={cn(
+                      "flex min-w-0 flex-col items-center overflow-hidden border-r border-border/60 text-center leading-tight",
+                      isCompact ? "pb-3 pt-1" : "pb-4 pt-1.5"
+                    )}
+                  >
+                    <span>{width < 22 ? monthAbbr[date.getMonth()][0] : monthAbbr[date.getMonth()]}</span>
+                    {showYear && (
+                      <span className="text-[8px] text-amber-700 dark:text-amber-400">
+                        {String(date.getFullYear()).slice(2)}
+                      </span>
+                    )}
+                  </div>
+                );
+              }
               return (
                 <div
                   key={date.toISOString()}
-                  className="flex items-start justify-center border-r border-border/60 px-1 pb-4 pt-1.5 text-center"
+                  className={cn(
+                    "flex items-start justify-center border-r border-border/60 px-1 text-center",
+                    isCompact ? "pb-3 pt-1" : "pb-4 pt-1.5"
+                  )}
                 >
                   {monthAbbr[date.getMonth()]}
                   {showYear && ` ${date.getFullYear()}`}
@@ -723,7 +895,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
             ))}
           </div>
         </HoverCardTrigger>
-        <HoverCardContent className="w-[800px] max-h-none overflow-visible bg-popover text-popover-foreground z-40 rounded-none" side="top" align="center" sideOffset={10}>
+        <HoverCardContent className="w-[800px] max-w-[calc(100vw-2rem)] max-h-none overflow-visible bg-popover text-popover-foreground z-40 rounded-none" side="top" align="center" sideOffset={10}>
           <div className="space-y-3">
             <h3 className="font-semibold text-sm">Resumen de Proyectos</h3>
             <div>
@@ -814,19 +986,18 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
         </HoverCardContent>
       </HoverCard>
 
-      <ContextMenu onOpenChange={(open) => {
+      {showGantt && <ContextMenu onOpenChange={(open) => {
         if (!open) {
           setContextMenuProject(null);
           setContextMenuDate(null);
         }
       }}>
-        <ContextMenuTrigger asChild>
+        <ContextMenuTrigger asChild disabled={isCompact}>
           <div
             ref={ganttChartRef}
-            className="gantt-body relative w-full min-w-full flex-1 bg-background overflow-hidden"
-            style={{ minHeight: `${Math.max(calculatedProjects.length * rowHeight, 200)}px` }}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
+            className="gantt-body relative w-full min-w-full flex-1 bg-background overflow-hidden [-webkit-touch-callout:none]"
+            style={{ minHeight: `${Math.max(rowProjects.length * rowHeight, isCompact ? 0 : 200)}px` }}
+            onPointerDown={handleBodyPointerDown}
             onContextMenu={handleContainerContextMenu}
           >
             <div className="absolute inset-0 pointer-events-none">
@@ -877,28 +1048,45 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                 {/* Hidden span for measuring text width */}
                 <span 
                   ref={textMeasureRef}
-                  className="absolute opacity-0 pointer-events-none text-xs font-bold whitespace-nowrap"
+                  className={cn("absolute opacity-0 pointer-events-none font-bold whitespace-nowrap", isCompact ? "text-[10px]" : "text-xs")}
                   style={{ top: '-1000px' }}
                 />
                 
-                {calculatedProjects.map((project, index) => {
-                  const offsetDays = (project.start.getTime() - minDate.getTime()) / (1000 * 3600 * 24);
-                  const left = offsetDays * dayWidth;
+                {reorderPreview && (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 z-[1] border border-dashed border-primary/70 bg-primary/5"
+                    style={{ top: `${reorderPreview.slot * rowHeight}px`, height: `${rowHeight}px` }}
+                    aria-hidden="true"
+                  />
+                )}
+                {rowProjects.map((project, index) => {
+                  const isDragged = drag?.active === true && drag.projectId === project.id;
+                  const shiftOffset = isDragged && drag.mode === 'shift' && dayWidth > 0
+                    ? shiftedDayOffset(project, drag.dx)
+                    : null;
+                  const left = shiftOffset === null ? projectLeft(project) : shiftOffset * dayWidth;
                   const width = Math.max(0, project.duration * dayWidth - 2); // -2 for some horizontal padding
                   const measurement = textMeasurements[project.id];
                   const textFits = measurement?.fits ?? true;
                   const hasUnreadActivity = unreadBaseProjectIds.has(project.baseProjectId);
 
                   return (
-                    <div key={project.id} className="gantt-row grid absolute w-full" style={{ gridTemplateColumns: `1fr`, top: `${index * rowHeight}px`, height: `${rowHeight}px` }}>
+                    <div
+                      key={project.id}
+                      className={cn(
+                        "gantt-row grid absolute w-full",
+                        isDragged ? "z-30" : reorderPreview && "transition-[top] duration-150 ease-out"
+                      )}
+                      style={{ gridTemplateColumns: `1fr`, top: `${rowTop(project.id, index)}px`, height: `${rowHeight}px` }}
+                    >
                       <div
                         className="gantt-bars-container relative h-full pointer-events-none"
                       >
-                        {dragFeedback && dragInfo?.projectId === project.id && (
-                          <div className="absolute top-0 bottom-0 z-50 pointer-events-none" style={{ left: `${dragFeedback.left}px` }}>
+                        {shiftOffset !== null && (
+                          <div className="absolute top-0 bottom-0 z-50 pointer-events-none" style={{ left: `${left}px` }}>
                             <div className="h-full w-px bg-primary/75"></div>
                             <div className="absolute -top-2 left-0 -translate-x-1/2 -translate-y-full bg-popover text-popover-foreground text-xs font-mono px-2.5 py-1.5 rounded-md border border-primary/20 shadow-md whitespace-nowrap">
-                              {dragFeedback.date}
+                              {addDays(minDate, shiftOffset).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                             </div>
                           </div>
                         )}
@@ -907,14 +1095,14 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              {/* This div acts as the hover trigger area and positions the draggable bar */}
                              <div
                                className={cn(
-                                 'absolute z-[2] h-[22px] top-1/2 -translate-y-1/2 text-xs select-none pointer-events-auto',
+                                 'absolute z-[2] top-1/2 -translate-y-1/2 select-none pointer-events-auto',
+                                 isCompact ? 'h-[14px] text-[10px]' : 'h-[22px] text-xs',
                                  { 'opacity-50': project.muted }
                                )}
                                style={{ left: `${left}px`, width: `${width}px` }}
                              >
                                {/* This inner div is the actual draggable element */}
                                <div
-                                 draggable={isEditingEnabled}
                                  role="button"
                                  tabIndex={0}
                                  aria-label={`${project.name}${hasUnreadActivity ? ". Actividad nueva." : ""}`}
@@ -922,22 +1110,16 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                    if (suppressProjectClickRef.current) return;
                                    onProjectOpen(project);
                                  }}
-                                 onKeyDown={(event) => {
-                                   if (event.key === 'Enter' || event.key === ' ') {
-                                     event.preventDefault();
-                                     onProjectOpen(project);
-                                   }
-                                 }}
-                                 onDragStart={(e) => handleDragStart(e, project.id)}
-                                 onDragEnd={() => {
-                                   setDragInfo(null);
-                                   setDragFeedback(null);
-                                   onInteractionChange?.(false);
-                                   window.setTimeout(() => { suppressProjectClickRef.current = false; }, 0);
-                                 }}
+                                 onKeyDown={(event) => handleBarKeyDown(event, project)}
+                                 onPointerDown={(event) => handleBarPointerDown(event, project.id)}
+                                 onPointerMove={handleBarPointerMove}
+                                 onPointerUp={(event) => finishBarDrag(event, true)}
+                                 onPointerCancel={(event) => finishBarDrag(event, false)}
                                  className={cn(
-                                   "relative h-full w-full border px-2 flex items-center justify-center text-xs font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                   "relative h-full w-full border px-2 flex items-center justify-center font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
+                                   isCompact ? "text-[10px]" : "text-xs",
                                     isEditingEnabled ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                                   isDragged && drag.mode === 'reorder' && "cursor-ns-resize ring-2 ring-primary/60",
                                    project.muted
                                      ? "project-bar-muted border-dashed"
                                      : "project-bar"
@@ -959,7 +1141,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  ) : (
                                    <div className="relative h-full w-full">
                                      <span
-                                       className="absolute font-bold text-foreground px-2 py-1 whitespace-nowrap z-10"
+                                       className={cn("absolute font-bold text-foreground px-2 whitespace-nowrap z-10", isCompact ? "py-0" : "py-1")}
                                        style={{
                                          left: '100%',
                                          top: '50%',
@@ -973,7 +1155,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                </div>
                              </div>
                            </HoverCardTrigger>
-                           <HoverCardContent className="w-64 bg-popover text-popover-foreground rounded-none">
+                           <HoverCardContent className={cn("w-64 bg-popover text-popover-foreground rounded-none", drag?.active && "hidden")}>
                              <div className="space-y-2 p-2 text-xs">
                                <p className="font-bold text-sm">{project.name}</p>
                                <div className="grid grid-cols-[50px,1fr] gap-y-1 items-center">
@@ -1006,6 +1188,11 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                    <span>{(project.duration / (365/12)).toFixed(1)} meses</span>
                                  </div>
                                </div>
+                               {isEditingEnabled && (
+                                 <p className="border-t border-border pt-2 text-[10px] text-muted-foreground">
+                                   Arrastra para cambiar la fecha · Ctrl + arrastrar para reordenar
+                                 </p>
+                               )}
                              </div>
                            </HoverCardContent>
                          </HoverCard>
@@ -1014,11 +1201,11 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   );
                 })}
 
-                {calculatedProjects.length === 0 && (
+                {rowProjects.length === 0 && (
                   <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
                     {isEditingEnabled
-                      ? 'No hay proyectos para mostrar. Haz clic derecho para anadir un proyecto.'
-                      : 'No hay proyectos para mostrar. Desbloquea para editar.'}
+                      ? 'No hay proyectos para mostrar. Haz clic derecho para añadir un proyecto.'
+                      : 'No hay proyectos para mostrar.'}
                   </div>
                 )}
               </div>
@@ -1026,7 +1213,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
           <ContextMenuContent className="w-48">
             {!isEditingEnabled && (
               <>
-                <ContextMenuLabel>Edicion bloqueada</ContextMenuLabel>
+                <ContextMenuLabel>Solo lectura</ContextMenuLabel>
                 <ContextMenuSeparator />
               </>
             )}
@@ -1091,7 +1278,8 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
               )}
             </>
           </ContextMenuContent>
-        </ContextMenu>
+        </ContextMenu>}
+    </div>
     </div>
   );
 };

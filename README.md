@@ -83,6 +83,39 @@ Production should use its exact public HTTPS origin, for example
 `AUTH_REDIRECT_PATH` to that path, such as `/gantt/`. `MICROSOFT_REDIRECT_URI` is recommended in every
 deployed environment so proxy headers cannot change the OAuth callback.
 
+## Editing permissions
+
+Every signed-in user can read the plan. Only editors can change shared data
+(scenarios, projects, capacity, statuses, notes and the shared date range); the
+server refuses every other write from a viewer with `403`. New users start as
+viewers. A viewer who changes the date range only changes their own view, which
+is kept in that browser until they reset it.
+
+`tschussler@grupopatagual.cl` is the administrator: always an editor, and the
+only user who sees **Usuarios** (grant or revoke editing) and **Actividad**.
+Users appear in **Usuarios** once they are in `auth_users`, i.e. after their
+first login or when listed in `AUTH_ALLOWED_EMAILS`. Permission changes apply
+to open sessions within 30 seconds.
+
+When this feature was introduced, users who had already made a change recorded
+in the audit log kept editing; everyone else became a viewer.
+
+## Timeline shortcuts
+
+- Drag a bar: change the project's start date.
+- Ctrl (⌘ on macOS) + drag a bar: move the project up or down.
+- Alt + ↑/↓ on a focused bar: move it one row.
+
+## Phones
+
+Phones (narrow screens, and touch screens in landscape) get a compact,
+read-only layout, whatever the user's permission: a slim header with the
+scenario, a **Gantt | Capacidad** switch, the date range (which only changes that
+phone's view) and a menu. Each view fills the screen: the Gantt fits the whole
+range to the screen width, and the capacity chart scrolls sideways and opens at
+the current month. The **Silenciados** button shows or hides muted projects
+(hidden by default on phones). Tap a bar to read its card. Editing needs the desktop layout.
+
 The app records successful login/logout, the first view of each scenario per
 session, and every successful mutation. Repeated polling does not create
 repeated view entries. Authenticated users can inspect recent entries through

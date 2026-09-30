@@ -13,6 +13,7 @@ const initAuditDb = (db) => {
       scenario_name TEXT,
       summary TEXT NOT NULL,
       details_json TEXT,
+      coalesce_started_at TEXT,
       FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE SET NULL
     );
 
@@ -20,11 +21,18 @@ const initAuditDb = (db) => {
       ON audit_logs (occurred_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_scenario
       ON audit_logs (scenario_id, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_project_moves
+      ON audit_logs (
+        action, actor_email, entity_type, entity_id, scenario_id, occurred_at DESC
+      );
   `);
 
   const auditColumns = db.prepare("PRAGMA table_info(audit_logs)").all();
   if (!auditColumns.some((column) => column.name === "scenario_name")) {
     db.prepare("ALTER TABLE audit_logs ADD COLUMN scenario_name TEXT").run();
+  }
+  if (!auditColumns.some((column) => column.name === "coalesce_started_at")) {
+    db.prepare("ALTER TABLE audit_logs ADD COLUMN coalesce_started_at TEXT").run();
   }
   db.prepare(`
     UPDATE audit_logs
@@ -123,22 +131,108 @@ const initAuditDb = (db) => {
   stripHistoricalActorNames();
 };
 
-const recordAudit = (db, entry) => {
+const PROJECT_MOVE_COALESCE_MS = 60 * 1000;
+
+const projectMoveSummary = (details) => {
+  const projectName = details?.after?.name || details?.before?.name;
+  const initialDay = String(details?.before?.start || "").slice(0, 10);
+  const newDay = String(details?.after?.start || "").slice(0, 10);
+  if (!projectName || !/^\d{4}-\d{2}-\d{2}$/.test(initialDay) || !/^\d{4}-\d{2}-\d{2}$/.test(newDay)) {
+    return null;
+  }
+  return `Movió el proyecto ${projectName} de ${initialDay} a ${newDay}`;
+};
+
+const coalesceProjectMove = (db, entry, actorEmail, scenarioName, occurredAt) => {
+  if (entry.action !== "project.move" || entry.entityId === undefined || entry.entityId === null) {
+    return null;
+  }
+
+  const incomingDetails = entry.details;
+  if (!projectMoveSummary(incomingDetails)) return null;
+
+  const windowStart = new Date(
+    new Date(occurredAt).getTime() - PROJECT_MOVE_COALESCE_MS
+  ).toISOString();
+  const previous = db.prepare(`
+    SELECT id, occurred_at, coalesce_started_at, details_json
+    FROM audit_logs
+    WHERE action = 'project.move'
+      AND actor_email = ?
+      AND entity_type = ?
+      AND entity_id = ?
+      AND scenario_id IS ?
+      AND COALESCE(coalesce_started_at, occurred_at) BETWEEN ? AND ?
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `).get(
+    actorEmail,
+    entry.entityType,
+    String(entry.entityId),
+    entry.scenarioId ?? null,
+    windowStart,
+    occurredAt
+  );
+  if (!previous?.details_json) return null;
+
+  let previousDetails;
+  try {
+    previousDetails = JSON.parse(previous.details_json);
+  } catch {
+    return null;
+  }
+  if (!previousDetails?.before) return null;
+
+  const mergedDetails = {
+    ...previousDetails,
+    ...incomingDetails,
+    before: previousDetails.before,
+    after: incomingDetails.after,
+  };
+  const summary = projectMoveSummary(mergedDetails);
+  if (!summary) return null;
+
+  return db.prepare(`
+    UPDATE audit_logs
+    SET occurred_at = ?,
+        actor_name = ?,
+        session_id = ?,
+        scenario_name = ?,
+        summary = ?,
+        details_json = ?,
+        coalesce_started_at = COALESCE(coalesce_started_at, occurred_at)
+    WHERE id = ?
+  `).run(
+    occurredAt,
+    entry.actorName || null,
+    entry.sessionId || null,
+    scenarioName,
+    summary,
+    JSON.stringify(mergedDetails),
+    previous.id
+  );
+};
+
+const recordAudit = (db, entry, now = new Date()) => {
   const actorEmail = String(entry.actorEmail || "").trim().toLowerCase();
   if (!actorEmail) throw new Error("Audit actor email is required");
+  const occurredAt = new Date(now).toISOString();
   const scenarioName = entry.scenarioName || (
     entry.scenarioId === undefined || entry.scenarioId === null
       ? null
       : db.prepare("SELECT name FROM scenarios WHERE id = ?").get(entry.scenarioId)?.name || null
   );
+  const coalesced = coalesceProjectMove(db, entry, actorEmail, scenarioName, occurredAt);
+  if (coalesced) return coalesced;
 
   return db.prepare(`
     INSERT INTO audit_logs (
       occurred_at, actor_email, actor_name, session_id, action,
-      entity_type, entity_id, scenario_id, scenario_name, summary, details_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      entity_type, entity_id, scenario_id, scenario_name, summary, details_json,
+      coalesce_started_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    new Date().toISOString(),
+    occurredAt,
     actorEmail,
     entry.actorName || null,
     entry.sessionId || null,
@@ -148,7 +242,8 @@ const recordAudit = (db, entry) => {
     entry.scenarioId ?? null,
     scenarioName,
     entry.summary,
-    entry.details === undefined ? null : JSON.stringify(entry.details)
+    entry.details === undefined ? null : JSON.stringify(entry.details),
+    entry.action === "project.move" ? occurredAt : null
   );
 };
 

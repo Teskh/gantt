@@ -19,12 +19,15 @@ interface ProductionRateMonthlyProps {
   monthPositions: Array<{ key: string; date: Date; width: number; x: number }>;
   isEditingEnabled: boolean;
   onInteractionChange?: (active: boolean) => void;
+  compact?: boolean;
+  // Overrides the default height, e.g. to fill the phone screen.
+  height?: number;
 }
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
-const chartHeight = 240;
+const CHART_HEIGHT = 240;
 const chartPaddingY = 18;
 const chartBottomPadding = 0;
 const dragThresholdPx = 3;
@@ -45,7 +48,10 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
   monthPositions,
   isEditingEnabled,
   onInteractionChange,
+  compact = false,
+  height,
 }) => {
+  const chartHeight = height && height > 0 ? height : CHART_HEIGHT;
   const series = useMemo(
     () => buildMonthlySeries(points, minMonth, maxMonth),
     [points, minMonth, maxMonth]
@@ -209,7 +215,8 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
     }
   }, [series, draggingKey]);
 
-  const canEditRange = isEditingEnabled && Boolean(onRateRangeChange);
+  // The value range is a per-browser view setting, not shared data.
+  const canEditRange = Boolean(onRateRangeChange);
 
   const openRangeEditor = useCallback(() => {
     if (!canEditRange) return;
@@ -245,7 +252,6 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
 
   useEffect(() => {
     if (isEditingEnabled) return;
-    setRangeEditorOpen(false);
     setDraggingKey(null);
     setHoveredKey(null);
     onInteractionChange?.(false);
@@ -267,6 +273,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
       className="relative w-full border-b border-border bg-card"
       style={{ height: `${chartHeight}px` }}
     >
+      <div className="sticky left-0 z-10 h-0" style={{ width: "min(100%, 100vw)" }}>
       <button
         type="button"
         onClick={openRangeEditor}
@@ -285,14 +292,9 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
             : "cursor-default"
         )}
       >
-        CAPACIDAD DE PRODDUCION [{unitLabel}]
+        {compact ? "CAPACIDAD" : "CAPACIDAD DE PRODUCCIÓN"} [{unitLabel}]
         {isRateRangeCustom && <span className="ml-1 normal-case">*</span>}
       </button>
-      {!isEditingEnabled && (
-        <span className="absolute left-3 top-9 z-10 border border-border bg-background/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-          Edicion bloqueada
-        </span>
-      )}
       {rangeEditorOpen && (
         <div
           role="dialog"
@@ -388,13 +390,23 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
           </button>
         ))}
       </nav>
+      {compact && [0.25, 0.5, 0.75].map((ratio) => (
+        <span
+          key={ratio}
+          className="pointer-events-none absolute left-1 -translate-y-1/2 bg-card/80 px-1 text-[10px] font-semibold text-muted-foreground"
+          style={{ top: `${chartPaddingY + plotHeight * ratio}px` }}
+        >
+          {Math.round(minRate + (1 - ratio) * rateSpan)}
+        </span>
+      ))}
+      </div>
       <svg
         ref={svgRef}
         width="100%"
         height="100%"
         viewBox={`0 0 ${safeChartWidth} ${chartHeight}`}
         preserveAspectRatio="none"
-        className="absolute inset-0 touch-none"
+        className={cn("absolute inset-0", isEditingEnabled && "touch-none")}
       >
         {[0.25, 0.5, 0.75].map((ratio) => {
           const y = chartPaddingY + plotHeight * ratio;
@@ -411,7 +423,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
                 strokeWidth={1}
                 vectorEffect="non-scaling-stroke"
               />
-              <text
+              {!compact && <text
                 x={8}
                 y={y}
                 textAnchor="start"
@@ -421,7 +433,7 @@ export const ProductionRateMonthly: React.FC<ProductionRateMonthlyProps> = ({
                 pointerEvents="none"
               >
                 {labelValue}
-              </text>
+              </text>}
             </g>
           );
         })}

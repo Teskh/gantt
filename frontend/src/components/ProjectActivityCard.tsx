@@ -25,6 +25,7 @@ interface ProjectActivityCardProps {
   onClose: () => void;
   onEdit: (project: Project) => void;
   onActivitySeen: (projectId: number, baseProjectId: number, throughActivityId: number) => Promise<void>;
+  canEdit: boolean;
 }
 
 const formatActivityTime = (value: string) =>
@@ -46,7 +47,7 @@ const activitySentence = (entry: ProjectActivityEntry) => {
 const sameCardData = (current: ProjectCardData | null, incoming: ProjectCardData) =>
   current !== null && JSON.stringify(current) === JSON.stringify(incoming);
 
-export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }: ProjectActivityCardProps) {
+export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen, canEdit }: ProjectActivityCardProps) {
   const [card, setCard] = useState<ProjectCardData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -325,14 +326,16 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
                 <h2 id="project-card-title" className="mt-1 truncate text-lg font-bold">{project.name}</h2>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => onEdit(project)}
-                  className="inline-flex h-8 items-center gap-1 border border-border px-2 text-xs font-semibold hover:border-amber-500"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Editar datos
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(project)}
+                    className="inline-flex h-8 items-center gap-1 border border-border px-2 text-xs font-semibold hover:border-amber-500"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Editar datos
+                  </button>
+                )}
                 <button type="button" onClick={onClose} className="p-2 text-muted-foreground hover:text-foreground" aria-label="Cerrar">
                   <X className="h-4 w-4" />
                 </button>
@@ -362,14 +365,16 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
             <section className="border-b border-border px-5 py-5">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-[0.16em]">Estados</h3>
-                <button
-                  type="button"
-                  onClick={() => setSettingsOpen(true)}
-                  className="inline-flex h-8 items-center gap-1 border border-border px-2 text-xs font-semibold hover:border-amber-500"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  Configurar
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(true)}
+                    className="inline-flex h-8 items-center gap-1 border border-border px-2 text-xs font-semibold hover:border-amber-500"
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                    Configurar
+                  </button>
+                )}
               </div>
 
               {loading && <p className="mt-4 text-xs text-muted-foreground">Cargando ficha...</p>}
@@ -385,7 +390,7 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
                       <label htmlFor={`status-${status.definitionId}`} className="text-xs font-semibold">
                         {status.name}
                       </label>
-                      <button
+                      {canEdit && <button
                         type="button"
                         onClick={() => void removeStatus(status.definitionId, status.name)}
                         disabled={changingStatusId === status.definitionId}
@@ -394,16 +399,16 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
                       >
                         <X className="h-3 w-3" />
                         Quitar
-                      </button>
+                      </button>}
                     </div>
                     <select
                       id={`status-${status.definitionId}`}
                       value={status.optionId ?? ""}
-                      disabled={changingStatusId === status.definitionId}
+                      disabled={!canEdit || changingStatusId === status.definitionId}
                       onChange={(event) => void updateStatus(status.definitionId, Number(event.target.value))}
                       className="h-10 w-full min-w-0 bg-background px-3 text-xs outline-none focus:bg-amber-500/10 disabled:opacity-50"
                     >
-                      <option value="" disabled>Asignado — seleccione un valor</option>
+                      <option value="" disabled>{canEdit ? "Asignado — seleccione un valor" : "Sin valor"}</option>
                       {status.options.map((option) => (
                         <option key={option.id} value={option.id}>
                           {option.label}{option.archived ? " (retirado)" : ""}
@@ -414,7 +419,7 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
                 ))}
               </div>
 
-              {card && availableStatuses.length > 0 && (
+              {canEdit && card && availableStatuses.length > 0 && (
                 <div className="mt-3">
                   <button
                     type="button"
@@ -457,7 +462,7 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
               {error && <p role="alert" className="mt-3 border-l-2 border-red-500 pl-3 text-xs text-red-600">{error}</p>}
             </section>
 
-            <section className="px-5 py-5">
+            {canEdit && <section className="px-5 py-5">
               <div className="flex items-center gap-2">
                 <MessageSquareText className="h-4 w-4 text-amber-600" />
                 <h3 className="text-xs font-bold uppercase tracking-[0.16em]">Nueva nota</h3>
@@ -482,9 +487,9 @@ export function ProjectActivityCard({ project, onClose, onEdit, onActivitySeen }
                   {savingNote ? "Guardando..." : "Agregar nota"}
                 </button>
               </div>
-            </section>
+            </section>}
 
-            <section className="border-t border-border px-5 py-5">
+            <section className={`${canEdit ? "border-t border-border " : ""}px-5 py-5`}>
               <div className="flex items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-muted-foreground" />
                 <h3 className="text-xs font-bold uppercase tracking-[0.16em]">Actividad</h3>

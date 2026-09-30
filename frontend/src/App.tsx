@@ -3,14 +3,17 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import './App.css'
 import { ProductionGantt } from './components/ProductionGantt'
 import { ProjectModal } from './components/ProjectModal'
-import { ScenarioManager, type Scenario } from './components/ScenarioManager'
+import { ScenarioManager, type CompactView, type Scenario } from './components/ScenarioManager'
 import { ActivityLog } from './components/ActivityLog'
 import { LoginScreen } from './components/LoginScreen'
 import { ProjectActivityCard } from './components/ProjectActivityCard'
+import { UserPermissionsDialog } from './components/UserPermissionsDialog'
 import { ThemeProvider } from './components/theme-provider'
 import { apiFetch, apiRequest } from './lib/api'
-import { addMonths, normalizeMonth, serializeMonth } from './lib/production-rate'
+import { addMonths, normalizeMonth, parseMonthValue, serializeMonth } from './lib/production-rate'
+import { compareProjectOrder } from './lib/project-order'
 import { canApplyScenarioSnapshot, isStrictlyNewerRevision } from './lib/sync'
+import { COMPACT_LAYOUT_QUERY, useMediaQuery } from './lib/use-media-query'
 
 export interface Project {
   id: number;
@@ -35,8 +38,9 @@ export interface AuthUser {
   email: string;
   displayName: string;
   microsoftId: string | null;
+  isAdmin: boolean;
+  canEdit: boolean;
 }
-
 
 
 interface SerializedProject extends Omit<Project, 'start'> {
@@ -87,11 +91,69 @@ const normalizeProject = (project: SerializedProject): Project => ({
   color: typeof project.color === 'string' ? project.color : null,
 });
 
-const parseMonthValue = (value: string): Date | null => {
-  const [year, month] = value.split("-").map(Number);
-  if (!year || !month) return null;
-  return new Date(year, month - 1, 1);
+const formatMonthValue = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+interface MonthRange {
+  start: Date;
+  end: Date;
+}
+
+// Viewers cannot change the shared range, so their own range lives in this browser.
+const personalRangeKey = (email: string) => `gantt-personal-range:${email.toLowerCase()}`;
+
+const loadPersonalRange = (email: string): MonthRange | null => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(personalRangeKey(email)) ?? "null");
+    const start = typeof stored?.start === "string" ? parseMonthValue(stored.start) : null;
+    const end = typeof stored?.end === "string" ? parseMonthValue(stored.end) : null;
+    return start && end && start <= end ? { start, end } : null;
+  } catch {
+    return null;
+  }
 };
+
+const savePersonalRange = (email: string, range: MonthRange | null) => {
+  try {
+    if (range) {
+      localStorage.setItem(
+        personalRangeKey(email),
+        JSON.stringify({ start: formatMonthValue(range.start), end: formatMonthValue(range.end) })
+      );
+    } else {
+      localStorage.removeItem(personalRangeKey(email));
+    }
+  } catch {
+    /* storage unavailable: the range still applies until reload */
+  }
+};
+
+const COMPACT_VIEW_KEY = "gantt-compact-view";
+
+const loadCompactView = (): CompactView => {
+  try {
+    return localStorage.getItem(COMPACT_VIEW_KEY) === "capacity" ? "capacity" : "gantt";
+  } catch {
+    return "gantt";
+  }
+};
+
+const HIDE_MUTED_KEY = "gantt-compact-hide-muted";
+
+const loadHideMuted = (): boolean => {
+  try {
+    return localStorage.getItem(HIDE_MUTED_KEY) !== "false";
+  } catch {
+    return true;
+  }
+};
+
+const sameAuthUser = (a: AuthUser, b: AuthUser) =>
+  a.email === b.email &&
+  a.displayName === b.displayName &&
+  a.microsoftId === b.microsoftId &&
+  a.isAdmin === b.isAdmin &&
+  a.canEdit === b.canEdit;
 
 interface AuthenticatedAppProps {
   currentUser: AuthUser;
@@ -99,7 +161,29 @@ interface AuthenticatedAppProps {
 }
 
 function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
-  const canViewActivity = currentUser.email.toLowerCase() === "tschussler@grupopatagual.cl";
+  const canViewActivity = currentUser.isAdmin;
+  // Phones are for looking only: editing needs the desktop layout.
+  const isCompact = useMediaQuery(COMPACT_LAYOUT_QUERY);
+  const canEdit = currentUser.canEdit && !isCompact;
+  const [compactView, setCompactView] = useState<CompactView>(loadCompactView);
+  // Phones hide muted projects by default so the active ones fit on screen.
+  const [hideMuted, setHideMuted] = useState(loadHideMuted);
+  const handleHideMutedChange = (hide: boolean) => {
+    setHideMuted(hide);
+    try {
+      localStorage.setItem(HIDE_MUTED_KEY, String(hide));
+    } catch {
+      /* the choice still applies until reload */
+    }
+  };
+  const handleCompactViewChange = (view: CompactView) => {
+    setCompactView(view);
+    try {
+      localStorage.setItem(COMPACT_VIEW_KEY, view);
+    } catch {
+      /* the choice still applies until reload */
+    }
+  };
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -110,22 +194,25 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const [isChartInteracting, setIsChartInteracting] = useState(false);
   const [pendingSnapshot, setPendingSnapshot] = useState<ScenarioSnapshot | null>(null);
   const [initialDate, setInitialDate] = useState<Date>(new Date());
-  const defaultRangeStart = normalizeMonth(new Date());
-  const defaultRangeEnd = addMonths(defaultRangeStart, 11);
-  const [rangeStart, setRangeStart] = useState<Date>(defaultRangeStart);
-  const [rangeEnd, setRangeEnd] = useState<Date>(defaultRangeEnd);
+  const [sharedRange, setSharedRange] = useState<MonthRange>(() => {
+    const start = normalizeMonth(new Date());
+    return { start, end: addMonths(start, 11) };
+  });
+  const [personalRange, setPersonalRange] = useState<MonthRange | null>(
+    () => loadPersonalRange(currentUser.email)
+  );
+  const isPersonalRange = !canEdit && personalRange !== null;
+  const { start: rangeStart, end: rangeEnd } = isPersonalRange ? personalRange : sharedRange;
   const [syncError, setSyncError] = useState<string | null>(null);
   const [availableFrontendAsset, setAvailableFrontendAsset] = useState<string | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [usersOpen, setUsersOpen] = useState(false);
   const [unreadBaseProjectIds, setUnreadBaseProjectIds] = useState<Set<number>>(() => new Set());
   const activeScenarioRef = useRef<Scenario | null>(null);
   const settingsRevisionRef = useRef<number | null>(null);
 
   const [isEditingScenarioName, setIsEditingScenarioName] = useState(false);
   const [scenarioNameDraft, setScenarioNameDraft] = useState('');
-
-  const formatMonthValue = (date: Date) =>
-    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
   activeScenarioRef.current = activeScenario;
 
@@ -209,8 +296,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
 
     const parsedStart = parseMonthValue(data.rangeStart);
     const parsedEnd = parseMonthValue(data.rangeEnd);
-    if (parsedStart) setRangeStart(parsedStart);
-    if (parsedEnd) setRangeEnd(parsedEnd);
+    if (parsedStart && parsedEnd) setSharedRange({ start: parsedStart, end: parsedEnd });
     settingsRevisionRef.current = data.revision;
     return true;
   }, []);
@@ -246,22 +332,32 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       });
   };
 
+  // Editors change the range for everyone; viewers only change their own view.
+  const changeRange = (next: MonthRange) => {
+    if (canEdit) {
+      setSharedRange(next);
+      saveRangeSettings(next.start, next.end);
+    } else {
+      setPersonalRange(next);
+      savePersonalRange(currentUser.email, next);
+    }
+  };
+
   const handleRangeStartChange = (value: string) => {
     const parsed = parseMonthValue(value);
     if (!parsed) return;
-    const nextEnd = parsed > rangeEnd ? parsed : rangeEnd;
-    setRangeStart(parsed);
-    setRangeEnd(nextEnd);
-    saveRangeSettings(parsed, nextEnd);
+    changeRange({ start: parsed, end: parsed > rangeEnd ? parsed : rangeEnd });
   };
 
   const handleRangeEndChange = (value: string) => {
     const parsed = parseMonthValue(value);
     if (!parsed) return;
-    const nextStart = parsed < rangeStart ? parsed : rangeStart;
-    setRangeStart(nextStart);
-    setRangeEnd(parsed);
-    saveRangeSettings(nextStart, parsed);
+    changeRange({ start: parsed < rangeStart ? parsed : rangeStart, end: parsed });
+  };
+
+  const handleRangeReset = () => {
+    setPersonalRange(null);
+    savePersonalRange(currentUser.email, null);
   };
 
   useEffect(() => {
@@ -270,9 +366,14 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       .catch((error) => reportSyncError(error, "No se pudo cargar la configuracion del servidor."));
   }, [applySettings, reportSyncError]);
 
+  // "YYYY-MM-01" must be read as a local month: new Date() would parse it as UTC
+  // midnight, which is the previous month in Chile, and every save shifted it back.
   const normalizeProductionRatePoints = (points: SerializedProductionRatePoint[]): ProductionRatePoint[] =>
     points
-      .map((point) => ({ ...point, month: new Date(point.month), isActive: Boolean(point.isActive) }))
+      .flatMap((point) => {
+        const month = parseMonthValue(point.month);
+        return month ? [{ ...point, month, isActive: Boolean(point.isActive) }] : [];
+      })
       .sort((a, b) => a.month.getTime() - b.month.getTime());
 
   const applySnapshot = useCallback((snapshot: ScenarioSnapshot) => {
@@ -585,13 +686,13 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
   };
 
-  const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
+  const postProjectReorder = (projectId: number, route: string, body: Record<string, unknown> = {}) => {
     const scenario = activeScenarioRef.current;
     if (!scenario) return;
-    apiRequest("/api/projects/" + projectId + "/" + action, {
+    apiRequest("/api/projects/" + projectId + "/" + route, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedRevision: scenario.revision }),
+      body: JSON.stringify({ ...body, expectedRevision: scenario.revision }),
     })
       .then((response) => handleScenarioWriteResponse(response, scenario.id))
       .then((result) => {
@@ -600,6 +701,24 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
         return apiFetch<ScenarioSnapshot>("/api/scenarios/" + scenario.id + "/snapshot").then(applySnapshot);
       })
       .catch((error) => handleScenarioWriteFailure(error, scenario.id));
+  };
+
+  const handleProjectReorder = (projectId: number, action: 'move-up' | 'move-down' | 'move-to-top' | 'move-to-bottom') => {
+    postProjectReorder(projectId, action);
+  };
+
+  const handleProjectMoveTo = (projectId: number, targetIndex: number) => {
+    // Show the new order right away so the dropped row does not snap back while saving.
+    setProjects((current) => {
+      const ordered = [...current].sort(compareProjectOrder);
+      const moving = ordered.find((project) => project.id === projectId);
+      if (!moving) return current;
+      const reordered = ordered.filter((project) => project.id !== projectId);
+      reordered.splice(targetIndex, 0, moving);
+      const orderById = new Map(reordered.map((project, index) => [project.id, index]));
+      return current.map((project) => ({ ...project, displayOrder: orderById.get(project.id) ?? project.displayOrder }));
+    });
+    postProjectReorder(projectId, "move-to", { targetIndex });
   };
 
   const handleProjectAdd = (newProject: Omit<Project, 'id' | 'muted' | 'displayOrder' | 'baseProjectId'>) => {
@@ -802,7 +921,9 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
 
   return (
     <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
-      <div className="flex flex-col min-h-screen bg-background text-foreground">
+      <div className={isCompact
+        ? "flex h-[100dvh] flex-col overflow-hidden bg-background text-foreground"
+        : "flex flex-col min-h-screen bg-background text-foreground"}>
         <ScenarioManager
           scenarios={scenarios}
           activeScenario={activeScenario}
@@ -820,12 +941,19 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
           rangeEnd={formatMonthValue(rangeEnd)}
           onRangeStartChange={handleRangeStartChange}
           onRangeEndChange={handleRangeEndChange}
+          isPersonalRange={isPersonalRange}
+          onRangeReset={handleRangeReset}
           hasRemoteChanges={pendingSnapshot !== null}
           onApplyRemoteChanges={() => { if (pendingSnapshot) applySnapshot(pendingSnapshot); }}
           currentUser={currentUser}
-          canViewActivity={canViewActivity}
           onOpenActivity={() => setActivityOpen(true)}
+          onOpenUsers={() => setUsersOpen(true)}
           onLogout={onLogout}
+          compact={isCompact}
+          compactView={compactView}
+          onCompactViewChange={handleCompactViewChange}
+          hideMuted={hideMuted}
+          onHideMutedChange={handleHideMutedChange}
         />
         {availableFrontendAsset && (
           <div
@@ -872,9 +1000,13 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
               onCreateProjectAtDate={handleCreateProjectAtDate}
               onProjectMuteToggle={handleProjectMuteToggle}
               onProjectReorder={handleProjectReorder}
+              onProjectMoveTo={handleProjectMoveTo}
               rangeStart={rangeStart}
               rangeEnd={rangeEnd}
-              isEditingEnabled={true}
+              isEditingEnabled={canEdit}
+              compact={isCompact}
+              compactView={compactView}
+              hideMuted={isCompact && hideMuted}
               onInteractionChange={setIsChartInteracting}
             />
           ) : (
@@ -888,17 +1020,21 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
             initialDate={initialDate}
             onCancel={() => setProjectModalOpen(false)}
             onSubmit={handleModalSubmit}
-            canEdit={true}
+            canEdit={canEdit}
           />
           <ProjectActivityCard
             project={projectCardId === null ? null : projects.find((project) => project.id === projectCardId) ?? null}
             onClose={() => setProjectCardId(null)}
             onActivitySeen={handleActivitySeen}
             onEdit={handleEditProject}
+            canEdit={canEdit}
           />
         </main>
         {canViewActivity && (
           <ActivityLog open={activityOpen} onClose={() => setActivityOpen(false)} />
+        )}
+        {currentUser.isAdmin && (
+          <UserPermissionsDialog open={usersOpen} onClose={() => setUsersOpen(false)} />
         )}
       </div>
     </ThemeProvider>
@@ -920,6 +1056,25 @@ function App() {
       window.removeEventListener("gantt:unauthorized", handleUnauthorized);
     };
   }, []);
+
+  const loggedIn = Boolean(currentUser);
+  useEffect(() => {
+    if (!loggedIn) return;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      apiFetch<AuthUser>("/api/auth/me")
+        .then((user) => setCurrentUser((current) => current && sameAuthUser(current, user) ? current : user))
+        .catch(() => { /* a 401 already signs the user out */ });
+    };
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("gantt:forbidden", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("gantt:forbidden", refresh);
+    };
+  }, [loggedIn]);
 
   const handleLogout = () => {
     apiFetch<{ success: boolean }>("/api/auth/logout", { method: "POST" })

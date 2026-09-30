@@ -10,6 +10,14 @@ export const normalizeMonth = (date: Date): Date =>
 export const addMonths = (date: Date, amount: number): Date =>
   new Date(date.getFullYear(), date.getMonth() + amount, 1);
 
+// Reads "YYYY-MM" or "YYYY-MM-DD" as a local month. new Date("YYYY-MM-DD") is UTC
+// midnight, which falls in the previous month west of Greenwich (e.g. Chile).
+export const parseMonthValue = (value: string): Date | null => {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return null;
+  return new Date(year, month - 1, 1);
+};
+
 export const monthKey = (date: Date): string =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
 
@@ -126,3 +134,16 @@ export const buildMonthlySeries = (
 };
 
 export const serializeMonth = (date: Date): string => monthKey(date);
+
+// The chart edits only the visible months; fold them back into the full list so
+// saving does not drop the months outside the visible range.
+export const mergeMonthlySeries = (
+  points: MonthlyRatePoint[],
+  editedSeries: MonthlyRatePoint[]
+): MonthlyRatePoint[] => {
+  const editedMonths = new Set(editedSeries.map((point) => monthKey(normalizeMonth(point.month))));
+  return [
+    ...points.filter((point) => !editedMonths.has(monthKey(normalizeMonth(point.month)))),
+    ...editedSeries,
+  ].sort(sortByMonth);
+};

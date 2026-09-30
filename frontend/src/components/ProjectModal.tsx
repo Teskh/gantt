@@ -20,6 +20,17 @@ const PROJECT_COLOR_OPTIONS = [
 const isPresetColor = (value: string) =>
   PROJECT_COLOR_OPTIONS.some((option) => option.value === value);
 
+// <input type="date"> works in local calendar days; toISOString() and
+// new Date("YYYY-MM-DD") would shift the day by the UTC offset.
+const formatDateInput = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const parseDateInput = (value: string): Date | null => {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
 export const ProjectModal: React.FC<ProjectModalProps> = ({
   open,
   project,
@@ -28,8 +39,6 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   onCancel,
   canEdit,
 }) => {
-  const formatDateInput = (d: Date) => d.toISOString().split('T')[0];
-
   const [name, setName] = useState(project?.name || '');
   const [m2, setM2] = useState(project?.m2.toString() || '');
   const [ggStr, setGgStr] = useState(project?.gg?.toString() || '4.5');
@@ -46,6 +55,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       setM2(project.m2.toString());
       setGgStr(project.gg.toString());
       setPriorityStr((project.priority ?? 10).toString());
+      setStartStr(formatDateInput(project.start));
       const presetColor = project.color && isPresetColor(project.color) ? project.color : '';
       setColor(presetColor);
       setUseCustomColor(Boolean(presetColor));
@@ -63,15 +73,15 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-card border border-border p-6 rounded-lg w-[440px] max-h-[90vh] overflow-y-auto shadow-lg">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border p-6 rounded-lg w-full max-w-[440px] max-h-[90vh] overflow-y-auto shadow-lg">
         <h2 className="text-xl font-bold mb-4 text-foreground">
           {project ? 'Editar Proyecto' : 'Agregar Nuevo Proyecto'}
         </h2>
 
         {!canEdit && (
           <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-            Edicion bloqueada. Usa el candado para habilitar cambios.
+            Tu usuario tiene acceso de solo lectura.
           </div>
         )}
 
@@ -161,18 +171,16 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           </div>
         </div>
 
-        {!project && (
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-1 text-foreground">Fecha de Inicio</label>
-            <input
-              type="date"
-              className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
-              value={startStr}
-              onChange={e => setStartStr(e.target.value)}
-              disabled={!canEdit}
-            />
-          </div>
-        )}
+        <div className="mb-4">
+          <label className="block text-sm font-medium mb-1 text-foreground">Fecha de Inicio</label>
+          <input
+            type="date"
+            className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+            value={startStr}
+            onChange={e => setStartStr(e.target.value)}
+            disabled={!canEdit}
+          />
+        </div>
 
         <div className="flex justify-end space-x-2">
           <button
@@ -189,7 +197,12 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
               const parsedM2 = parseInt(m2, 10);
               const parsedGg = parseFloat(ggStr);
               const parsedPriority = parseInt(priorityStr, 10);
+              // Keep the stored start untouched unless the day was actually changed.
+              const selectedDate = project && startStr === formatDateInput(project.start)
+                ? project.start
+                : parseDateInput(startStr);
               if (
+                selectedDate &&
                 name.trim() &&
                 !isNaN(parsedM2) &&
                 !isNaN(parsedGg) &&
@@ -198,7 +211,6 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
                 parsedGg > 0 &&
                 parsedPriority > 0
               ) {
-                const selectedDate = project ? project.start : new Date(startStr);
                 onSubmit(
                   name,
                   parsedM2,

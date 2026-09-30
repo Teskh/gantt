@@ -20,8 +20,8 @@ let sharedPrimaryProject;
 let sharedScenarioProject;
 
 db.prepare(`
-  INSERT INTO auth_users (email, display_name, microsoft_id, is_active, created_at)
-  VALUES (?, ?, ?, 1, ?)
+  INSERT INTO auth_users (email, display_name, microsoft_id, is_active, can_edit, created_at)
+  VALUES (?, ?, ?, 1, 1, ?)
 `).run(testEmail, "Test Planner", "microsoft-test-id", new Date().toISOString());
 db.prepare(`
   INSERT INTO auth_sessions (id, user_email, created_at, last_seen_at, expires_at)
@@ -85,6 +85,8 @@ test("authenticated session exposes the Microsoft user", async () => {
     email: testEmail,
     displayName: "Test Planner",
     microsoftId: "microsoft-test-id",
+    isAdmin: false,
+    canEdit: true,
   });
 });
 

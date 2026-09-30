@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const { recordAudit } = require("./audit");
+const { ensurePermissionColumns, isAdminEmail } = require("./permissions");
 
 const SESSION_COOKIE = "gantt_session";
 const OAUTH_STATE_COOKIE = "gantt_oauth_state";
@@ -149,6 +150,7 @@ const initAuthDb = (db, { allowTenantUsers = tenantUserAccessEnabled() } = {}) =
       display_name TEXT,
       microsoft_id TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      can_edit INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       last_login_at TEXT
     );
@@ -170,6 +172,7 @@ const initAuthDb = (db, { allowTenantUsers = tenantUserAccessEnabled() } = {}) =
 
     DROP TABLE IF EXISTS session_scenario_views;
   `);
+  ensurePermissionColumns(db);
 
   if (allowTenantUsers) return;
 
@@ -214,7 +217,11 @@ const createAuth = (db, {
   const sessionDurationMs = sessionDays * 24 * 60 * 60 * 1000;
   const authRedirectPath = normalizeAuthRedirectPath(process.env.AUTH_REDIRECT_PATH);
 
-  const cleanupExpired = () => {
+  let lastCleanupAt = 0;
+  const cleanupExpired = ({ force = false } = {}) => {
+    // Every polled request passes through here; purging once a minute is enough.
+    if (!force && Date.now() - lastCleanupAt < 60 * 1000) return;
+    lastCleanupAt = Date.now();
     const now = nowIso();
     db.prepare("DELETE FROM oauth_states WHERE expires_at <= ?").run(now);
     db.prepare("DELETE FROM auth_sessions WHERE expires_at <= ?").run(now);
@@ -225,7 +232,7 @@ const createAuth = (db, {
     const sessionId = parseCookies(req)[SESSION_COOKIE];
     if (!sessionId) return res.status(401).json({ error: "Authentication required" });
     const row = db.prepare(`
-      SELECT s.id, s.user_email, s.last_seen_at, u.display_name, u.microsoft_id
+      SELECT s.id, s.user_email, s.last_seen_at, u.display_name, u.microsoft_id, u.can_edit
       FROM auth_sessions s
       JOIN auth_users u ON lower(u.email) = lower(s.user_email)
       WHERE s.id = ? AND s.expires_at > ? AND u.is_active = 1
@@ -235,10 +242,13 @@ const createAuth = (db, {
       return res.status(401).json({ error: "Authentication required" });
     }
     req.sessionId = row.id;
+    const isAdmin = isAdminEmail(row.user_email);
     req.user = {
       email: row.user_email,
       displayName: row.display_name || row.user_email,
       microsoftId: row.microsoft_id,
+      isAdmin,
+      canEdit: isAdmin || Boolean(row.can_edit),
     };
     const staleSeen = new Date(row.last_seen_at).getTime() < Date.now() - 5 * 60 * 1000;
     if (staleSeen) {
@@ -260,7 +270,7 @@ const createAuth = (db, {
       if (!isMicrosoftConfigured(config)) {
         return redirectError(res, "Microsoft no esta configurado. Contacta al administrador.");
       }
-      cleanupExpired();
+      cleanupExpired({ force: true });
       const state = randomToken();
       db.prepare("INSERT INTO oauth_states (state_hash, created_at, expires_at) VALUES (?, ?, ?)")
         .run(hashToken(state), nowIso(), futureIso(10 * 60 * 1000));

@@ -67,6 +67,7 @@ const actionLabels: Record<string, string> = {
   "project.status.update": "Seguimiento",
   "project.status.unassign": "Seguimiento",
   "project.note.create": "Nota",
+  "user.permissions.update": "Permisos",
 };
 
 const readProductionRateChanges = (details: unknown): ProductionRateChange[] => {

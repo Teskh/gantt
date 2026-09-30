@@ -10,6 +10,9 @@ export const apiRequest = async (path: string, options?: RequestInit) => {
   });
   if (response.status === 401) {
     window.dispatchEvent(new Event("gantt:unauthorized"));
+  } else if (response.status === 403) {
+    // Permissions may have changed since the session loaded; re-read them.
+    window.dispatchEvent(new Event("gantt:forbidden"));
   }
   return response;
 };
