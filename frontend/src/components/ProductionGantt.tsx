@@ -46,6 +46,8 @@ interface ProductionGanttProps {
   onInteractionChange?: (active: boolean) => void;
   // Phone layout: shows either the Gantt or the capacity chart, full screen.
   compact?: boolean;
+  // Unfolded iPhone Duo: phone layout with full-size rows.
+  roomyRows?: boolean;
   compactView?: 'gantt' | 'capacity';
   // Leaves muted projects out of the rows (the phone view offers this).
   hideMuted?: boolean;
@@ -175,10 +177,12 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
   isEditingEnabled,
   onInteractionChange,
   compact: isCompact = false,
+  roomyRows = false,
   compactView = 'gantt',
   hideMuted = false,
 }) => {
-  const rowHeight = isCompact ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
+  const denseRows = isCompact && !roomyRows;
+  const rowHeight = denseRows ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
   const showCapacity = !isCompact || compactView === 'capacity';
   const showGantt = !isCompact || compactView === 'gantt';
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -360,6 +364,16 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     return () => resizeObserver.disconnect();
   }, [isCompact, showCapacity]);
 
+  // Folding or unfolding an iPhone Duo changes the row height; keep the same rows in view.
+  const previousRowHeightRef = useRef(rowHeight);
+  useLayoutEffect(() => {
+    const previous = previousRowHeightRef.current;
+    previousRowHeightRef.current = rowHeight;
+    const scroller = scrollerRef.current;
+    if (!scroller || previous === rowHeight) return;
+    scroller.scrollTop = scroller.scrollTop * (rowHeight / previous);
+  }, [rowHeight]);
+
   const calculatedProjects = useMemo(() => {
     if (projects.length === 0 || activeRatePoints.length === 0) return [];
 
@@ -444,6 +458,13 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
     lastDay.setHours(0, 0, 0, 0);
     return [start, lastDay];
   }, [rangeStart, rangeEnd]);
+
+  // Projects at the top of the order that finished before the visible range give
+  // up their rows, so the first project in view sits on the first row.
+  const hiddenLeadingRows = useMemo(() => {
+    const firstInView = rowProjects.findIndex((project) => project.end >= minDate);
+    return firstInView < 0 ? rowProjects.length : firstInView;
+  }, [rowProjects, minDate]);
 
   const minMonth = useMemo(() => normalizeMonth(minDate), [minDate]);
   const maxMonth = useMemo(() => normalizeMonth(maxDate), [maxDate]);
@@ -679,16 +700,22 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       projectId: drag.projectId,
       originIndex,
       dy: drag.dy,
-      slot: reorderSlot(originIndex, drag.dy, calculatedProjects.length),
+      slot: visibleReorderSlot(originIndex, drag.dy),
     };
-  }, [drag, calculatedProjects]);
+  }, [drag, calculatedProjects, hiddenLeadingRows]);
+
+  // A drop slot never lands among the hidden rows above the first visible one.
+  function visibleReorderSlot(originIndex: number, dy: number) {
+    return Math.max(hiddenLeadingRows, reorderSlot(originIndex, dy, calculatedProjects.length));
+  }
 
   const rowTop = (projectId: number, index: number) => {
-    if (!reorderPreview) return index * rowHeight;
+    const visibleIndex = (i: number) => (i - hiddenLeadingRows) * rowHeight;
+    if (!reorderPreview) return visibleIndex(index);
     const { originIndex, slot, dy } = reorderPreview;
-    if (projectId === reorderPreview.projectId) return originIndex * rowHeight + dy;
+    if (projectId === reorderPreview.projectId) return visibleIndex(originIndex) + dy;
     const indexWithoutDragged = index < originIndex ? index : index - 1;
-    return (indexWithoutDragged < slot ? indexWithoutDragged : indexWithoutDragged + 1) * rowHeight;
+    return visibleIndex(indexWithoutDragged < slot ? indexWithoutDragged : indexWithoutDragged + 1);
   };
 
   const handleBarPointerDown = (event: React.PointerEvent<HTMLDivElement>, projectId: number) => {
@@ -744,7 +771,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
       projects,
       calculatedProjects.map((item) => item.id),
       project.id,
-      reorderSlot(originIndex, current.dy, calculatedProjects.length)
+      visibleReorderSlot(originIndex, current.dy)
     );
     if (targetIndex !== null) onProjectMoveTo(project.id, targetIndex);
   };
@@ -996,7 +1023,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
           <div
             ref={ganttChartRef}
             className="gantt-body relative w-full min-w-full flex-1 bg-background overflow-hidden [-webkit-touch-callout:none]"
-            style={{ minHeight: `${Math.max(rowProjects.length * rowHeight, isCompact ? 0 : 200)}px` }}
+            style={{ minHeight: `${Math.max((rowProjects.length - hiddenLeadingRows) * rowHeight, isCompact ? 0 : 200)}px` }}
             onPointerDown={handleBodyPointerDown}
             onContextMenu={handleContainerContextMenu}
           >
@@ -1048,18 +1075,19 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                 {/* Hidden span for measuring text width */}
                 <span 
                   ref={textMeasureRef}
-                  className={cn("absolute opacity-0 pointer-events-none font-bold whitespace-nowrap", isCompact ? "text-[10px]" : "text-xs")}
+                  className={cn("absolute opacity-0 pointer-events-none font-bold whitespace-nowrap", denseRows ? "text-[10px]" : "text-xs")}
                   style={{ top: '-1000px' }}
                 />
                 
                 {reorderPreview && (
                   <div
                     className="pointer-events-none absolute inset-x-0 z-[1] border border-dashed border-primary/70 bg-primary/5"
-                    style={{ top: `${reorderPreview.slot * rowHeight}px`, height: `${rowHeight}px` }}
+                    style={{ top: `${(reorderPreview.slot - hiddenLeadingRows) * rowHeight}px`, height: `${rowHeight}px` }}
                     aria-hidden="true"
                   />
                 )}
                 {rowProjects.map((project, index) => {
+                  if (index < hiddenLeadingRows) return null;
                   const isDragged = drag?.active === true && drag.projectId === project.id;
                   const shiftOffset = isDragged && drag.mode === 'shift' && dayWidth > 0
                     ? shiftedDayOffset(project, drag.dx)
@@ -1096,7 +1124,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                              <div
                                className={cn(
                                  'absolute z-[2] top-1/2 -translate-y-1/2 select-none pointer-events-auto',
-                                 isCompact ? 'h-[14px] text-[10px]' : 'h-[22px] text-xs',
+                                 denseRows ? 'h-[14px] text-[10px]' : 'h-[22px] text-xs',
                                  { 'opacity-50': project.muted }
                                )}
                                style={{ left: `${left}px`, width: `${width}px` }}
@@ -1117,7 +1145,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  onPointerCancel={(event) => finishBarDrag(event, false)}
                                  className={cn(
                                    "relative h-full w-full border px-2 flex items-center justify-center font-bold uppercase tracking-tight transition-colors transition-shadow rounded-none",
-                                   isCompact ? "text-[10px]" : "text-xs",
+                                   denseRows ? "text-[10px]" : "text-xs",
                                     isEditingEnabled ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                                    isDragged && drag.mode === 'reorder' && "cursor-ns-resize ring-2 ring-primary/60",
                                    project.muted
@@ -1141,7 +1169,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                                  ) : (
                                    <div className="relative h-full w-full">
                                      <span
-                                       className={cn("absolute font-bold text-foreground px-2 whitespace-nowrap z-10", isCompact ? "py-0" : "py-1")}
+                                       className={cn("absolute font-bold text-foreground px-2 whitespace-nowrap z-10", denseRows ? "py-0" : "py-1")}
                                        style={{
                                          left: '100%',
                                          top: '50%',
@@ -1201,7 +1229,7 @@ export const ProductionGantt: React.FC<ProductionGanttProps> = ({
                   );
                 })}
 
-                {rowProjects.length === 0 && (
+                {rowProjects.length === hiddenLeadingRows && (
                   <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
                     {isEditingEnabled
                       ? 'No hay proyectos para mostrar. Haz clic derecho para añadir un proyecto.'

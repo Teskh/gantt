@@ -13,7 +13,7 @@ import { apiFetch, apiRequest } from './lib/api'
 import { addMonths, normalizeMonth, parseMonthValue, serializeMonth } from './lib/production-rate'
 import { compareProjectOrder } from './lib/project-order'
 import { canApplyScenarioSnapshot, isStrictlyNewerRevision } from './lib/sync'
-import { COMPACT_LAYOUT_QUERY, useMediaQuery } from './lib/use-media-query'
+import { COMPACT_LAYOUT_QUERY, useIsDuoUnfolded, useMediaQuery } from './lib/use-media-query'
 
 export interface Project {
   id: number;
@@ -163,7 +163,9 @@ interface AuthenticatedAppProps {
 function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
   const canViewActivity = currentUser.isAdmin;
   // Phones are for looking only: editing needs the desktop layout.
-  const isCompact = useMediaQuery(COMPACT_LAYOUT_QUERY);
+  // An unfolded iPhone Duo keeps the phone layout in both orientations, with roomier rows.
+  const isDuoUnfolded = useIsDuoUnfolded();
+  const isCompact = useMediaQuery(COMPACT_LAYOUT_QUERY) || isDuoUnfolded;
   const canEdit = currentUser.canEdit && !isCompact;
   const [compactView, setCompactView] = useState<CompactView>(loadCompactView);
   // Phones hide muted projects by default so the active ones fit on screen.
@@ -1005,6 +1007,7 @@ function AuthenticatedApp({ currentUser, onLogout }: AuthenticatedAppProps) {
               rangeEnd={rangeEnd}
               isEditingEnabled={canEdit}
               compact={isCompact}
+              roomyRows={isDuoUnfolded}
               compactView={compactView}
               hideMuted={isCompact && hideMuted}
               onInteractionChange={setIsChartInteracting}

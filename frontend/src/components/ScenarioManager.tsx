@@ -30,6 +30,7 @@ import {
   Users,
 } from 'lucide-react';
 import { ModeToggle } from './ui/mode-toggle';
+import { MobileFullscreenButton } from './MobileFullscreenButton';
 
 export interface Scenario {
   id: number;
@@ -142,7 +143,7 @@ function CompactHeader(props: ScenarioManagerProps) {
   }, [rangeOpen]);
 
   return (
-    <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-muted/40 px-2 py-1">
+    <header className="mobile-header flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-muted/40 px-2 py-1">
       <span className="text-sm font-bold tracking-tight text-amber-600">PLAN</span>
 
       <ScenarioPicker
@@ -246,6 +247,7 @@ function CompactHeader(props: ScenarioManagerProps) {
           Silenciados
         </button>
       )}
+      <MobileFullscreenButton />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button

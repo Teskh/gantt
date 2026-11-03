@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import type { Project } from '../App';
+import { evaluateExpression } from '../lib/math-expression';
+
+// m² is stored as a whole number, so formulas such as "10*20" round to it.
+const parseM2Input = (value: string): number | null => {
+  const result = evaluateExpression(value);
+  return result === null ? null : Math.round(result);
+};
+
+const isFormula = (value: string) => /[-+*/x×÷()]/i.test(value.trim().replace(/^[-+]/, ''));
 
 interface ProjectModalProps {
   open: boolean;
@@ -72,6 +81,8 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
 
   if (!open) return null;
 
+  const parsedM2Preview = parseM2Input(m2);
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-card border border-border p-6 rounded-lg w-full max-w-[440px] max-h-[90vh] overflow-y-auto shadow-lg">
@@ -99,13 +110,25 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-foreground">Tamaño (m²)</label>
           <input
-            type="number"
-            min="1"
+            type="text"
+            inputMode="decimal"
+            placeholder="Ej: 200 o 10*20"
             className="border border-border rounded w-full p-2 bg-background text-foreground focus:border-amber-500 focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
             value={m2}
             onChange={e => setM2(e.target.value)}
+            onBlur={() => {
+              const result = parseM2Input(m2);
+              if (result !== null && isFormula(m2)) setM2(result.toString());
+            }}
             disabled={!canEdit}
           />
+          {isFormula(m2) && (
+            <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
+              {parsedM2Preview === null
+                ? 'Fórmula incompleta'
+                : `= ${parsedM2Preview.toLocaleString('es-CL')} m²`}
+            </p>
+          )}
         </div>
 
         <div className="mb-4">
@@ -194,7 +217,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             disabled={!canEdit}
             onClick={() => {
               if (!canEdit) return;
-              const parsedM2 = parseInt(m2, 10);
+              const parsedM2 = parsedM2Preview ?? NaN;
               const parsedGg = parseFloat(ggStr);
               const parsedPriority = parseInt(priorityStr, 10);
               // Keep the stored start untouched unless the day was actually changed.

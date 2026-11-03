@@ -2,6 +2,24 @@
   user-select: none;
 }
 
+.mobile-page-fullscreen .mobile-header {
+  height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mobile-page-fullscreen .mobile-header > :not(.mobile-fullscreen-toggle) {
+  display: none;
+}
+
+.mobile-page-fullscreen .mobile-fullscreen-toggle {
+  position: fixed;
+  right: max(8px, env(safe-area-inset-right));
+  top: max(8px, env(safe-area-inset-top));
+  z-index: 60;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 20%);
+}
+
 .grid-bg {
   background-image:
     linear-gradient(var(--grid-line) 1px, transparent 1px),
